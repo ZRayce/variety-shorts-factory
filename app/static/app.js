@@ -1,7 +1,10 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { assets: [], creators: [], jobs: [], youtube: [], health: {} };
+const state = { assets: [], creators: [], jobs: [], youtube: [], projects: [], candidates: [], health: {} };
 const routeTitles = { overview: 'Overview', creators: 'Creator sources', library: 'Clip library', editor: 'Editor', review: 'Review queue', publishing: 'Publishing', history: 'Production history', settings: 'Settings' };
 let activeEditorAssetId = '';
+let activeProjectId = '';
+let timelineSegments = [];
+let sourceTranscriptCues = [];
 
 function showNotice(message) {
   const notice = $('#notice');
@@ -46,7 +49,7 @@ function renderAssets() {
   } else {
     list.innerHTML = state.assets.map(asset => {
       const permission = asset.permission_valid ? asset.permission_status : asset.permission_status === 'granted' ? 'expired' : asset.permission_status;
-      return `<tr><td><b>${escapeHtml(asset.filename)}</b><br><small>${escapeHtml((asset.sha256 || '').slice(0, 14))}… · ${(asset.size_bytes / 1048576).toFixed(1)} MB</small></td><td>${badge(asset.status)}<br><small>${duration(asset.duration)}${asset.width ? ` · ${asset.width}×${asset.height}` : ''}</small></td><td>${badge(permission)}<br><small>Commercial: ${escapeHtml(asset.commercial_permission_valid ? 'cleared' : asset.commercial_permission_status || 'unverified')}</small>${asset.creator_name ? `<br><small>${escapeHtml(asset.creator_name)}</small>` : ''}</td><td><small>${new Date(asset.imported_at).toLocaleString()}</small></td><td>${asset.status === 'inspection_required' ? `<button class="table-action" data-inspect="${escapeHtml(asset.id)}">Inspect</button><br>` : ''}<button class="table-action" data-permission="${escapeHtml(asset.id)}">Rights record</button></td></tr>`;
+      return `<tr><td><b>${escapeHtml(asset.filename)}</b><br><small>${escapeHtml((asset.sha256 || '').slice(0, 14))}… · ${(asset.size_bytes / 1048576).toFixed(1)} MB</small></td><td>${badge(asset.status)}<br><small>${duration(asset.duration)}${asset.width ? ` · ${asset.width}×${asset.height}${asset.frame_rate ? ` · ${Number(asset.frame_rate).toFixed(2)} fps` : ''}` : ''}</small></td><td>${badge(permission)}<br><small>Commercial: ${escapeHtml(asset.commercial_permission_valid ? 'cleared' : asset.commercial_permission_status || 'unverified')}</small>${asset.creator_name ? `<br><small>${escapeHtml(asset.creator_name)}</small>` : ''}</td><td><small>${new Date(asset.imported_at).toLocaleString()}</small></td><td>${asset.status === 'inspection_required' ? `<button class="table-action" data-inspect="${escapeHtml(asset.id)}">Inspect</button><br>` : ''}<button class="table-action" data-permission="${escapeHtml(asset.id)}">Rights record</button></td></tr>`;
     }).join('');
   }
   list.querySelectorAll('[data-permission]').forEach(button => button.addEventListener('click', () => openPermission(button.dataset.permission)));
@@ -79,6 +82,229 @@ function renderCreators() {
   $('#creator-select').innerHTML = '<option value="">Select a creator…</option>' + state.creators.map(creator => `<option value="${escapeHtml(creator.id)}">${escapeHtml(creator.name)}</option>`).join('');
   const list = $('#creator-list');
   if (list) list.innerHTML = state.creators.length ? state.creators.map(creator => `<tr><td><b>${escapeHtml(creator.name)}</b></td><td>${creator.source_url ? `<a href="${escapeHtml(creator.source_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(creator.source_url)}</a>` : '—'}</td><td><small>${new Date(creator.created_at).toLocaleString()}</small></td></tr>`).join('') : '<tr><td colspan="3" class="empty">No creator records yet.</td></tr>';
+}
+
+function renderTimeline() {
+  const list = $('#timeline-list');
+  const total = timelineSegments.reduce((sum, segment) => sum + segment.end_seconds - segment.start_seconds, 0);
+  $('#timeline-total').textContent = timelineSegments.length + ' segment' + (timelineSegments.length === 1 ? '' : 's') + ' · ' + duration(total);
+  if (!timelineSegments.length) $('#timeline-total').textContent = 'No segments saved';
+  list.innerHTML = timelineSegments.length ? timelineSegments.map((segment, index) =>
+    '<div class="timeline-row"><span class="segment-index">' + String(index + 1).padStart(2, '0') +
+    '</span><span>' + duration(segment.start_seconds) + ' → ' + duration(segment.end_seconds) + ' · ' +
+    (segment.end_seconds - segment.start_seconds).toFixed(1) + 's</span><span class="segment-tools">' +
+    '<button type="button" data-move-segment="' + index + '" data-direction="-1" aria-label="Move segment up" ' +
+    (index === 0 ? 'disabled' : '') + '>↑</button><button type="button" data-move-segment="' + index +
+    '" data-direction="1" aria-label="Move segment down" ' + (index === timelineSegments.length - 1 ? 'disabled' : '') +
+    '>↓</button><button type="button" data-remove-segment="' + index + '" aria-label="Remove segment">×</button></span></div>').join('') :
+    '<div class="empty">Set in/out points and add a segment.</div>';
+  list.querySelectorAll('[data-move-segment]').forEach(button => button.addEventListener('click', () => {
+    const index = Number(button.dataset.moveSegment), next = index + Number(button.dataset.direction);
+    if (next < 0 || next >= timelineSegments.length) return;
+    [timelineSegments[index], timelineSegments[next]] = [timelineSegments[next], timelineSegments[index]];
+    renderTimeline();
+  }));
+  list.querySelectorAll('[data-remove-segment]').forEach(button => button.addEventListener('click', () => {
+    timelineSegments.splice(Number(button.dataset.removeSegment), 1);
+    renderTimeline();
+  }));
+}
+
+function renderProjects() {
+  const select = $('#project-select');
+  const sourceId = $('#edit-asset').value;
+  const projects = state.projects.filter(project => project.asset_id === sourceId);
+  select.innerHTML = '<option value="">New timeline</option>' + projects.map(project =>
+    '<option value="' + escapeHtml(project.id) + '">' + escapeHtml(project.title) + ' · v' + project.current_version +
+    ' · ' + escapeHtml(project.review_status || 'draft') + '</option>').join('');
+  select.value = activeProjectId && projects.some(project => project.id === activeProjectId) ? activeProjectId : '';
+  renderTimeline();
+}
+
+function renderCandidates() {
+  const list = $('#candidate-list');
+  const sourceId = $('#edit-asset').value;
+  const candidates = state.candidates.filter(candidate => candidate.asset_id === sourceId);
+  if (!sourceId || !candidates.length) {
+    list.innerHTML = '<div class="panel empty">Select an inspected source and find candidate clips to start.</div>';
+    return;
+  }
+  list.innerHTML = candidates.map(candidate => {
+    const id = escapeHtml(candidate.id), preview = '/api/assets/' + encodeURIComponent(candidate.asset_id) +
+      '/source#t=' + candidate.start_seconds + ',' + candidate.end_seconds;
+    const factors = (candidate.score_factors || []).map(factor => factor.name.replaceAll('_', ' ') + ' +' + factor.points).join(' · ');
+    const warning = (candidate.warnings || []).map(escapeHtml).join('<br>');
+    const reasons = (candidate.reasons || []).map(escapeHtml).join('<br>');
+    const accepted = candidate.status === 'pending';
+    const action = accepted ? '<button class="button primary" data-candidate-decision="' + id + '" data-decision="accepted">Accept for editing</button>' +
+      '<button class="button" data-candidate-decision="' + id + '" data-decision="rejected">Reject</button>' :
+      (candidate.project_id ? '<button class="button" data-open-project="' + escapeHtml(candidate.project_id) + '">Open edit project</button>' +
+       '<label><input type="checkbox" data-batch-project="' + escapeHtml(candidate.project_id) + '"> Select for batch render</label>' : '');
+    return '<article class="panel candidate-card"><video class="candidate-preview" controls preload="metadata" src="' + preview +
+      '"></video><div class="candidate-body"><div class="candidate-title"><b>' + duration(candidate.start_seconds) + ' → ' +
+      duration(candidate.end_seconds) + ' · ' + candidate.duration.toFixed(1) + ' sec</b>' + badge(candidate.status) +
+      '<span class="badge muted">Review score ' + candidate.score + '</span></div><div class="candidate-signals">' + reasons +
+      '<br>Signals: ' + escapeHtml((candidate.signals || []).join(', ') || 'none') + '<br>Factors: ' + escapeHtml(factors || 'baseline review window') +
+      '</div>' + (warning ? '<div class="candidate-warning">' + warning + '</div>' : '') +
+      '<div class="candidate-fields"><label>IN<input data-candidate-start="' + id + '" type="number" min="0" step="0.1" value="' +
+      candidate.start_seconds + '"></label><label>OUT<input data-candidate-end="' + id + '" type="number" min="0" step="0.1" value="' +
+      candidate.end_seconds + '"></label><label class="wide">Title<input data-candidate-title="' + id + '" maxlength="120" value="' +
+      escapeHtml(candidate.title || '') + '"></label><label class="wide">Hook (editorial note, not generated speech)<input data-candidate-hook="' + id +
+      '" maxlength="240" value="' + escapeHtml(candidate.hook || '') + '"></label><label class="wide">Review notes<textarea data-candidate-notes="' +
+      id + '" maxlength="1000" rows="2">' + escapeHtml(candidate.notes || '') + '</textarea></label></div><div class="candidate-actions">' +
+      action + '</div></div></article>';
+  }).join('');
+  list.querySelectorAll('[data-candidate-decision]').forEach(button => button.addEventListener('click', () =>
+    decideCandidate(button.dataset.candidateDecision, button.dataset.decision)));
+  list.querySelectorAll('[data-open-project]').forEach(button => button.addEventListener('click', () => loadEditProject(button.dataset.openProject)));
+}
+
+function captionStyleFromControls() {
+  return { font_name: $('#caption-font').value, font_size: Number($('#caption-size').value),
+    color: $('#caption-color').value, outline: Number($('#caption-outline').value),
+    shadow: Number($('#caption-shadow').value), placement: $('#caption-placement').value,
+    safe_margin: Number($('#caption-margin').value), max_line_length: Number($('#caption-line-length').value),
+    wrap: $('#caption-wrap').checked };
+}
+
+function setCaptionStyle(style) {
+  $('#caption-font').value = style.font_name;
+  $('#caption-size').value = style.font_size;
+  $('#caption-color').value = style.color;
+  $('#caption-outline').value = style.outline;
+  $('#caption-shadow').value = style.shadow;
+  $('#caption-placement').value = style.placement;
+  $('#caption-margin').value = style.safe_margin;
+  $('#caption-line-length').value = style.max_line_length;
+  $('#caption-wrap').checked = style.wrap;
+}
+
+function applyCaptionPreset(name) {
+  const style = name === 'shorts' ? { font_name: 'Arial', font_size: 30, color: '#FFFFFF', outline: 3,
+    shadow: 2, placement: 'bottom', safe_margin: 160, max_line_length: 24, wrap: true } :
+    name === 'long_form' ? { font_name: 'Arial', font_size: 22, color: '#FFFFFF', outline: 2,
+      shadow: 1, placement: 'bottom', safe_margin: 70, max_line_length: 42, wrap: true } : null;
+  if (style) setCaptionStyle(style);
+}
+
+function parseTranscriptSrt(source, sourceDuration) {
+  const normalized = source.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim();
+  if (!normalized) return [];
+  const blocks = normalized.split(/\n\s*\n/);
+  if (blocks.length > 1000) throw new Error('Transcript SRT is limited to 1,000 timed cues.');
+  const cues = blocks.map((block, index) => {
+    const lines = block.split('\n');
+    if (lines.length < 3 || lines[0].trim() !== String(index + 1)) throw new Error('Transcript cues need sequential numbers and valid SRT timing.');
+    const match = lines[1].trim().match(/^(\d{2,}):(\d{2}):(\d{2})[,.](\d{3}) --> (\d{2,}):(\d{2}):(\d{2})[,.](\d{3})$/);
+    if (!match) throw new Error('Transcript timestamps must use HH:MM:SS,mmm --> HH:MM:SS,mmm.');
+    const toSeconds = (hour, minute, second, milli) => ((Number(hour) * 60 + Number(minute)) * 60 + Number(second)) + Number(milli) / 1000;
+    const start_seconds = toSeconds(...match.slice(1, 5)), end_seconds = toSeconds(...match.slice(5, 9));
+    const text = lines.slice(2).join(' ').trim();
+    if (!(start_seconds >= 0 && end_seconds > start_seconds && end_seconds <= sourceDuration) || text.length > 500) throw new Error('Transcript timing must fit within source duration and each cue must be 500 characters or less.');
+    return { start_seconds, end_seconds, text };
+  });
+  return cues;
+}
+
+async function saveEditProject() {
+  const assetId = $('#edit-asset').value;
+  if (!assetId) throw new Error('Select a source first.');
+  const segments = timelineSegments.length ? timelineSegments : [{ start_seconds: Number($('#start').value), end_seconds: Number($('#end').value) }];
+  const payload = { title: $('#project-title').value, segments, profile: $('#render-profile').value,
+    content_preset: $('#content-preset').value, preset: $('#preset').value, crop_x: Number($('#crop-x').value),
+    crop_y: Number($('#crop-y').value), commercial_use: $('#commercial-use').checked,
+    editorial_notes: $('#editorial-notes').value, captions_srt: $('#captions-srt').value,
+    caption_preset: $('#caption-preset').value, caption_style: captionStyleFromControls(),
+    transcript_cues: sourceTranscriptCues };
+  const url = activeProjectId ? '/api/projects/' + encodeURIComponent(activeProjectId) : '/api/assets/' + encodeURIComponent(assetId) + '/projects';
+  const project = await api(url, { method: activeProjectId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  activeProjectId = project.id;
+  timelineSegments = project.plan.segments.map(segment => ({ ...segment }));
+  await refresh();
+  renderProjects();
+  showNotice('Saved ' + project.title + ' · version ' + project.current_version + '.');
+  return project;
+}
+
+async function loadEditProject(projectId) {
+  try {
+    const project = await api('/api/projects/' + encodeURIComponent(projectId));
+    activeProjectId = project.id;
+    $('#edit-asset').value = project.asset_id;
+    renderSourceMeta();
+    $('#project-title').value = project.plan.title;
+    $('#render-profile').value = project.plan.editing.profile;
+    $('#content-preset').value = project.plan.editing.content_preset;
+    $('#preset').value = project.plan.editing.visual_preset;
+    $('#crop-x').value = project.plan.editing.crop.x;
+    $('#crop-y').value = project.plan.editing.crop.y;
+    $('#captions-srt').value = project.plan.captions.text;
+    sourceTranscriptCues = project.plan.transcript_cues || [];
+    $('#transcript-status').textContent = sourceTranscriptCues.length + ' saved transcript cues loaded for timed overlap only.';
+    $('#caption-preset').value = project.plan.captions.preset;
+    setCaptionStyle(project.plan.captions.style);
+    $('#editorial-notes').value = project.plan.editorial_notes;
+    $('#commercial-use').checked = project.plan.commercial_use;
+    timelineSegments = project.plan.segments.map(segment => ({ ...segment }));
+    if (timelineSegments.length) {
+      $('#start').value = timelineSegments[0].start_seconds;
+      $('#end').value = timelineSegments[0].end_seconds;
+    }
+    renderProjects();
+    updateCropPreview();
+    location.hash = '#editor';
+    showNotice('Loaded ' + project.title + ' · version ' + project.current_version + '.');
+  } catch (error) { showNotice(error.message); }
+}
+
+async function decideCandidate(candidateId, decision) {
+  const selector = '[data-candidate-' ;
+  const start = $(selector + 'start="' + CSS.escape(candidateId) + '"]');
+  const end = $(selector + 'end="' + CSS.escape(candidateId) + '"]');
+  const title = $(selector + 'title="' + CSS.escape(candidateId) + '"]');
+  const hook = $(selector + 'hook="' + CSS.escape(candidateId) + '"]');
+  const notes = $(selector + 'notes="' + CSS.escape(candidateId) + '"]');
+  try {
+    await api('/api/candidates/' + encodeURIComponent(candidateId) + '/decision', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, start_seconds: Number(start.value),
+        end_seconds: Number(end.value), title: title.value, hook: hook.value, notes: notes.value,
+        profile: $('#render-profile').value, content_preset: $('#content-preset').value, preset: $('#preset').value,
+        caption_preset: $('#caption-preset').value, caption_style: captionStyleFromControls(),
+        transcript_cues: sourceTranscriptCues }) });
+    await refresh();
+    showNotice(decision === 'accepted' ? 'Candidate accepted into an editable draft project. It is not output-approved.' : 'Candidate rejected and recorded.');
+  } catch (error) { showNotice(error.message); }
+}
+
+async function discoverCandidates() {
+  const assetId = $('#edit-asset').value;
+  if (!assetId) return showNotice('Select a source first.');
+  const button = $('#discover-button');
+  button.disabled = true;
+  try {
+    const result = await api('/api/assets/' + encodeURIComponent(assetId) + '/discover', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content_preset: $('#content-preset').value,
+        transcript_cues: sourceTranscriptCues }) });
+    await refresh();
+    showNotice(result.candidates.length + ' review-only candidates found. ' + (result.diagnostics.join(' ') || result.scoring_note));
+  } catch (error) { showNotice(error.message); }
+  finally { button.disabled = false; }
+}
+
+async function renderSelectedProjects() {
+  const selected = [...document.querySelectorAll('[data-batch-project]:checked')].map(input => input.dataset.batchProject);
+  if (!selected.length) return showNotice('Accept and select one or more candidate projects first.');
+  let queued = 0;
+  for (const projectId of selected) {
+    try {
+      await api('/api/projects/' + encodeURIComponent(projectId) + '/render', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      queued += 1;
+    } catch (error) { showNotice(queued + ' projects queued before the queue stopped: ' + error.message); break; }
+  }
+  await refresh();
+  location.hash = '#review';
+  if (queued) showNotice(queued + ' accepted timeline' + (queued === 1 ? '' : 's') + ' queued. Each output still needs human review.');
 }
 
 function qualitySummary(source) {
@@ -128,6 +354,7 @@ function renderSourceMeta() {
     $('#source-meta').textContent = 'Choose an inspected source to see duration and rights status.';
     $('#preview-screen').innerHTML = '<div class="preview-placeholder"><span>9:16</span><b>SOURCE PREVIEW</b><small>Select a source to scrub and frame it</small></div>';
     $('#render-button').disabled = true;
+    $('#discover-button').disabled = true;
     $('#set-in').disabled = true;
     $('#set-out').disabled = true;
     $('#preview-status').textContent = 'Awaiting a source';
@@ -142,10 +369,11 @@ function renderSourceMeta() {
   }
   const permission = asset.permission_valid ? asset.permission_status : asset.permission_status === 'granted' ? 'expired' : asset.permission_status;
   const audioState = asset.has_audio == null ? 'audio not inspected' : asset.has_audio ? 'source audio present' : 'no source audio';
-  $('#source-meta').textContent = `${asset.creator_name || 'Creator not linked'} · ${duration(asset.duration)} · ${audioState} · permission ${permission} · ${asset.status}`;
+  $('#source-meta').textContent = `${asset.creator_name || 'Creator not linked'} · ${duration(asset.duration)} · ${asset.width || '—'}×${asset.height || '—'} · ${asset.frame_rate ? Number(asset.frame_rate).toFixed(2) + ' fps' : 'frame rate unknown'} · ${audioState} · permission ${permission} · ${asset.status}`;
   const commercial = $('#commercial-use').checked;
   const ready = Boolean(asset.duration && asset.permission_valid && (!commercial || asset.commercial_permission_valid) && state.health.ffmpeg_available && state.health.ffprobe_available);
   $('#render-button').disabled = !ready;
+  $('#discover-button').disabled = !Boolean(asset.duration && asset.permission_valid && state.health.ffmpeg_available);
   $('#render-button').title = ready ? '' : 'Requires inspected media, applicable current rights, FFmpeg, and FFprobe.';
   $('#render-help').textContent = !asset.duration ? 'Inspect this source with FFprobe before rendering.' : !asset.permission_valid ? 'Record current editing permission before rendering.' : commercial && !asset.commercial_permission_valid ? 'Commercial use is selected; record separate current commercial clearance.' : !state.health.ffmpeg_available || !state.health.ffprobe_available ? 'Install or configure FFmpeg and FFprobe, then restart the app to render.' : [0, false].includes(asset.has_audio) ? 'This source has no audio track. The output will also have no audio; the QA report will disclose this.' : 'Source audio is preserved. Captions are burned into the output. Review the rendered file before approval.';
   const vertical = $('#render-profile').value === 'short_vertical';
@@ -178,10 +406,11 @@ function updateCropPreview() {
 }
 
 async function refresh() {
-  [state.health, state.assets, state.creators, state.jobs, state.youtube] = await Promise.all([
-    api('/api/health'), api('/api/assets'), api('/api/creators'), api('/api/jobs'), api('/api/youtube-candidates')
+  [state.health, state.assets, state.creators, state.jobs, state.youtube, state.projects, state.candidates] = await Promise.all([
+    api('/api/health'), api('/api/assets'), api('/api/creators'), api('/api/jobs'), api('/api/youtube-candidates'),
+    api('/api/projects'), api('/api/candidates')
   ]);
-  renderAssets(); renderCreators(); renderJobs(); renderSettings(); renderSourceMeta(); renderYoutubeCandidates();
+  renderAssets(); renderCreators(); renderJobs(); renderSettings(); renderSourceMeta(); renderYoutubeCandidates(); renderProjects(); renderCandidates();
   $('#engine-status').textContent = state.health.ffmpeg_available && state.health.ffprobe_available ? 'FFmpeg + FFprobe ready' : 'Media tools unavailable';
   if (!state.health.ffmpeg_available || !state.health.ffprobe_available || !state.health.database_ok) {
     $('#engine-status').style.color = 'var(--orange)';
@@ -315,8 +544,83 @@ $('#file-input').addEventListener('change', event => importFiles([...event.targe
 $('#drop-zone').addEventListener('dragover', event => { event.preventDefault(); event.currentTarget.classList.add('drag'); });
 $('#drop-zone').addEventListener('dragleave', event => event.currentTarget.classList.remove('drag'));
 $('#drop-zone').addEventListener('drop', event => { event.preventDefault(); event.currentTarget.classList.remove('drag'); importFiles([...event.dataTransfer.files]); });
-$('#edit-asset').addEventListener('change', renderSourceMeta);
-$('#render-profile').addEventListener('change', renderSourceMeta);
+$('#edit-asset').addEventListener('change', () => {
+  activeProjectId = '';
+  timelineSegments = [];
+  sourceTranscriptCues = [];
+  $('#transcript-file').value = '';
+  $('#transcript-status').textContent = 'No source transcript loaded. Scene and silence signals remain available.';
+  $('#project-title').value = 'Untitled edit';
+  renderSourceMeta(); renderProjects(); renderCandidates();
+});
+$('#project-select').addEventListener('change', event => {
+  if (event.target.value) loadEditProject(event.target.value);
+  else { activeProjectId = ''; timelineSegments = []; renderTimeline(); }
+});
+$('#new-project').addEventListener('click', () => {
+  activeProjectId = ''; timelineSegments = []; $('#project-select').value = '';
+  $('#project-title').value = 'Untitled edit'; $('#editorial-notes').value = ''; $('#captions-srt').value = '';
+  $('#caption-preset').value = $('#render-profile').value === 'short_vertical' ? 'shorts' : 'long_form';
+  applyCaptionPreset($('#caption-preset').value);
+  renderTimeline(); showNotice('New unsaved timeline started.');
+});
+$('#add-segment').addEventListener('click', () => {
+  const start = Number($('#start').value), end = Number($('#end').value);
+  const asset = state.assets.find(item => item.id === $('#edit-asset').value);
+  if (!asset || !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > asset.duration) {
+    return showNotice('Choose valid in/out points inside the source duration.');
+  }
+  if (timelineSegments.length >= 100) return showNotice('A timeline can contain at most 100 segments.');
+  const total = timelineSegments.reduce((sum, item) => sum + item.end_seconds - item.start_seconds, 0) + end - start;
+  if ($('#render-profile').value === 'short_vertical' && total > 60) return showNotice('The combined Shorts timeline cannot exceed 60 seconds.');
+  timelineSegments.push({ start_seconds: start, end_seconds: end });
+  renderTimeline();
+});
+$('#save-project').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try { await saveEditProject(); }
+  catch (error) { showNotice(error.message); }
+  finally { button.disabled = false; }
+});
+$('#discover-button').addEventListener('click', discoverCandidates);
+$('#batch-render').addEventListener('click', renderSelectedProjects);
+$('#caption-preset').addEventListener('change', event => applyCaptionPreset(event.target.value));
+['#caption-font', '#caption-size', '#caption-color', '#caption-outline', '#caption-shadow', '#caption-placement',
+ '#caption-margin', '#caption-line-length', '#caption-wrap'].forEach(selector => {
+  $(selector).addEventListener('input', () => { $('#caption-preset').value = 'custom'; });
+  $(selector).addEventListener('change', () => { $('#caption-preset').value = 'custom'; });
+});
+$('#transcript-file').addEventListener('change', async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const asset = state.assets.find(item => item.id === $('#edit-asset').value);
+  if (file.size > 128 * 1024 || !asset?.duration) {
+    event.target.value = '';
+    return showNotice('Choose an SRT transcript up to 128 KiB for an inspected source.');
+  }
+  try {
+    sourceTranscriptCues = parseTranscriptSrt(await file.text(), asset.duration);
+    $('#transcript-status').textContent = sourceTranscriptCues.length + ' source transcript cues loaded for candidate overlap signals. Text is not semantically analyzed.';
+    showNotice('Source transcript timings loaded locally.');
+  } catch (error) {
+    sourceTranscriptCues = [];
+    $('#transcript-status').textContent = 'No source transcript loaded.';
+    showNotice(error.message);
+  }
+});
+$('#clear-transcript').addEventListener('click', () => {
+  sourceTranscriptCues = [];
+  $('#transcript-file').value = '';
+  $('#transcript-status').textContent = 'Source transcript cleared. Timed overlap signals are unavailable.';
+});
+$('#render-profile').addEventListener('change', () => {
+  renderSourceMeta();
+  if ($('#caption-preset').value !== 'custom') {
+    $('#caption-preset').value = $('#render-profile').value === 'short_vertical' ? 'shorts' : 'long_form';
+    applyCaptionPreset($('#caption-preset').value);
+  }
+});
 $('#commercial-use').addEventListener('change', () => { renderAssets(); renderSourceMeta(); });
 $('#crop-x').addEventListener('input', updateCropPreview);
 $('#crop-y').addEventListener('input', updateCropPreview);
@@ -339,14 +643,13 @@ $('#srt-file').addEventListener('change', async event => {
   showNotice(`Loaded captions from ${file.name}. Check their timestamps against the selected clip.`);
 });
 $('#render-button').addEventListener('click', async () => {
-  const assetId = $('#edit-asset').value;
-  if (!assetId) return showNotice('Select an asset first.');
+  if (!$('#edit-asset').value) return showNotice('Select an asset first.');
   $('#render-button').disabled = true;
   $('#preview-status').textContent = 'Render queued…';
   try {
-    const queued = await api(`/api/assets/${encodeURIComponent(assetId)}/render`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ start_seconds: Number($('#start').value), end_seconds: Number($('#end').value), profile: $('#render-profile').value, commercial_use: $('#commercial-use').checked, preset: $('#preset').value, crop_x: Number($('#crop-x').value), crop_y: Number($('#crop-y').value), editorial_notes: $('#editorial-notes').value, captions_srt: $('#captions-srt').value }),
+    const project = await saveEditProject();
+    const queued = await api('/api/projects/' + encodeURIComponent(project.id) + '/render', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     });
     await refresh();
     location.hash = '#review';

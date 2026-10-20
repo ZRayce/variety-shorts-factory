@@ -91,6 +91,12 @@ def application(environ, start_response):
             if path == "/api/creators": return json_response(start_response, 200, core.list_creators())
             if path == "/api/assets": return json_response(start_response, 200, core.list_assets())
             if path == "/api/youtube-candidates": return json_response(start_response, 200, core.list_youtube_candidates())
+            if path == "/api/candidates":
+                query = parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=True)
+                return json_response(start_response, 200, core.list_candidates(query.get("asset_id", [None])[0]))
+            if path == "/api/projects":
+                query = parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=True)
+                return json_response(start_response, 200, core.list_edit_projects(query.get("asset_id", [None])[0]))
             if path == "/api/jobs": return json_response(start_response, 200, core.list_jobs())
             if path == "/api/history": return json_response(start_response, 200, core.history())
             if path == "/api/publishing": return json_response(start_response, 200, core.publishing())
@@ -99,6 +105,12 @@ def application(environ, start_response):
                 return static_file(start_response, core.local_source(parts[2]), method, environ.get("HTTP_RANGE"))
             if len(parts) == 3 and parts[:2] == ["api", "jobs"]:
                 return json_response(start_response, 200, core.get_job(parts[2]))
+            if len(parts) == 3 and parts[:2] == ["api", "projects"]:
+                return json_response(start_response, 200, core.get_edit_project(parts[2]))
+            if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "versions":
+                return json_response(start_response, 200, core.list_edit_project_versions(parts[2]))
+            if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "reviews":
+                return json_response(start_response, 200, core.list_edit_project_reviews(parts[2]))
             if path.startswith("/api/files/"):
                 pieces = path.split("/")
                 if len(pieces) != 5:
@@ -114,6 +126,12 @@ def application(environ, start_response):
             parts = [unquote(piece) for piece in path.strip("/").split("/")]
             if len(parts) == 4 and parts[0:2] == ["api", "assets"] and parts[3] == "inspect":
                 return json_response(start_response, 200, core.inspect_asset(parts[2]))
+            if len(parts) == 4 and parts[0:2] == ["api", "assets"] and parts[3] == "discover":
+                data = api_body(environ)
+                return json_response(start_response, 201, core.discover_candidates(parts[2], data))
+            if len(parts) == 4 and parts[0:2] == ["api", "assets"] and parts[3] == "projects":
+                data = api_body(environ)
+                return json_response(start_response, 201, core.create_edit_project(parts[2], data))
             if len(parts) == 4 and parts[0:2] == ["api", "jobs"] and parts[3] == "cancel":
                 return json_response(start_response, 200, core.cancel_job(parts[2]))
             data = api_body(environ)
@@ -127,6 +145,15 @@ def application(environ, start_response):
                 return json_response(start_response, 200, core.review_job(parts[2], data))
             if len(parts) == 4 and parts[0:2] == ["api", "jobs"] and parts[3] == "retry":
                 return json_response(start_response, 202, core.retry_job(parts[2]))
+            if len(parts) == 4 and parts[0:2] == ["api", "candidates"] and parts[3] == "decision":
+                data = api_body(environ)
+                return json_response(start_response, 200, core.update_candidate(parts[2], data))
+            if len(parts) == 4 and parts[0:2] == ["api", "projects"] and parts[3] == "render":
+                return json_response(start_response, 202, core.queue_project_render(parts[2]))
+        if method == "PUT":
+            parts = [unquote(piece) for piece in path.strip("/").split("/")]
+            if len(parts) == 3 and parts[:2] == ["api", "projects"]:
+                return json_response(start_response, 200, core.update_edit_project(parts[2], api_body(environ)))
         raise core.APIError(404, "Route not found.")
     except core.APIError as exc:
         return json_response(start_response, exc.status, {"detail": exc.detail})

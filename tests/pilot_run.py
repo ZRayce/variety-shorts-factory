@@ -69,10 +69,13 @@ def run_pilot() -> None:
 
             page_status, _, page = call(base + "/")
             assert page_status == 200 and b"ClipForge" in page
+            assert b"project-select" in page and b"timeline-list" in page and b"candidate-list" in page
+            assert b"caption-preset" in page and b"transcript-file" in page
             style_status, _, style = call(base + "/static/style.css")
             script_status, _, script = call(base + "/static/app.js")
             assert style_status == 200 and b".review-video" in style and b"aspect-ratio:9/16" in style
             assert script_status == 200 and b"/api/assets/" in script and b"/source" in script and b"/api/youtube-candidates" in script
+            assert b"/api/projects/" in script and b"/api/candidates/" in script and b"/discover" in script
             assert b"/api/jobs/" in script and b"/cancel" in script
             health = json.loads(health_body)
             assert health["status"] == "ok" and health["publishing_enabled"] is False

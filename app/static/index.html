@@ -48,6 +48,14 @@
       <div class="editor-grid">
         <div class="panel editor-form">
           <label>Source asset<select id="edit-asset"><option value="">Select a source…</option></select></label>
+          <div class="project-controls">
+            <label>Saved editing project<select id="project-select"><option value="">New timeline</option></select></label>
+            <label>Project title<input id="project-title" maxlength="120" value="Untitled edit"></label>
+            <div class="timeline-actions"><button class="button" type="button" id="new-project">New</button><button class="button" type="button" id="save-project">Save version</button></div>
+            <div class="timeline-heading"><b>ORDERED TIMELINE</b><span id="timeline-total">No segments saved</span></div>
+            <div class="timeline-list" id="timeline-list"><div class="empty">Set in/out points and add a segment.</div></div>
+            <button class="button" type="button" id="add-segment">＋ Add current in/out as a segment</button>
+          </div>
           <label>Output profile<select id="render-profile"><option value="short_vertical">Shorts · Vertical 1080 × 1920 · max 60 seconds</option><option value="long_horizontal">Long-form · Widescreen 1920 × 1080</option></select></label>
           <div id="source-meta" class="source-meta">Choose an inspected source to see duration and rights status.</div>
           <div class="field-row">
@@ -55,6 +63,7 @@
             <label>OUT POINT <input id="end" type="number" min="0" step="0.1" value="30"></label>
           </div>
           <div class="playhead-actions"><button class="button" id="set-in" type="button">Set In at playhead</button><button class="button" id="set-out" type="button">Set Out at playhead</button></div>
+          <label>Content discovery preset<select id="content-preset"><option value="custom">Custom · balanced review windows</option><option value="gaming">Gaming · shorter moments, tighter context</option><option value="podcast">Podcast / interview · longer context</option><option value="educational">Educational / tutorial · preserve explanation</option><option value="cinematic">Cinematic / storytelling · restrained pacing</option><option value="creator_commentary">Creator commentary · focused openings</option></select></label>
           <label>Editing formula<select id="preset"><option value="clean_vertical">Clean vertical · 1×</option><option value="punchline">Punch-in · 1.14×</option><option value="reaction">Punch-in · 1.06×</option></select></label>
           <div class="crop-controls">
             <div class="crop-heading"><b id="frame-label">VERTICAL FRAMING</b><span>Adjust crop with the two sliders</span></div>
@@ -62,12 +71,25 @@
             <label>VERTICAL <output id="crop-y-value">50%</output><input id="crop-y" type="range" min="0" max="100" value="50"></label>
             <small class="field-help">The preview approximates your crop. The final position is applied during rendering.</small>
           </div>
+          <div class="caption-settings">
+            <label>Caption layout<select id="caption-preset"><option value="shorts">Shorts · large, concise, lower safe zone</option><option value="long_form">Long-form · smaller, longer reading lines</option><option value="custom">Custom settings</option></select></label>
+            <div class="field-row"><label>Font<select id="caption-font"><option>Arial</option><option>Segoe UI</option><option>Calibri</option><option>Aptos</option></select></label><label>Size<input id="caption-size" type="number" min="12" max="64" value="30"></label></div>
+            <div class="field-row"><label>Text color<input id="caption-color" type="color" value="#FFFFFF"></label><label>Placement<select id="caption-placement"><option value="bottom">Bottom</option><option value="center">Center</option><option value="top">Top</option></select></label></div>
+            <div class="field-row"><label>Outline<input id="caption-outline" type="number" min="0" max="8" value="3"></label><label>Shadow<input id="caption-shadow" type="number" min="0" max="8" value="2"></label></div>
+            <div class="field-row"><label>Safe margin<input id="caption-margin" type="number" min="10" max="300" value="160"></label><label>Max line length<input id="caption-line-length" type="number" min="10" max="60" value="24"></label></div>
+            <label class="check-row"><input type="checkbox" id="caption-wrap" checked> Wrap long caption lines</label>
+            <small class="field-help">Caption styling uses your installed system fonts; if a font is missing, ClipForge selects a readable system fallback. SRT timestamps remain unchanged. Word highlighting is unavailable without word-level transcript timings.</small>
+          </div>
           <label>Captions · SRT<textarea id="captions-srt" rows="6" placeholder="1&#10;00:00:00,000 --> 00:00:02,500&#10;Your caption text"></textarea></label>
+          <label class="srt-upload">Load a source transcript SRT (optional)<input type="file" id="transcript-file" accept=".srt,application/x-subrip,text/plain"></label>
+          <small class="field-help" id="transcript-status">No source transcript loaded. Scene and silence signals remain available.</small>
+          <button class="button" type="button" id="clear-transcript">Clear source transcript</button>
           <label class="srt-upload">Load an SRT file<input type="file" id="srt-file" accept=".srt,application/x-subrip,text/plain"></label>
           <label>Editorial contribution<textarea id="editorial-notes" rows="4" placeholder="What context, narration, or editorial choices make this clip clearer or more entertaining?"></textarea></label>
           <label class="check-row"><input type="checkbox" id="commercial-use"> This draft is intended for commercial use / monetization</label>
           <small class="field-help">Commercial use requires a separate current permission record. A rights record is your record, not independent legal verification.</small>
-          <button class="button primary" id="render-button">Render for review</button>
+          <button class="button primary" id="discover-button" type="button">Find candidate clips</button>
+          <button class="button primary" id="render-button">Save timeline and render</button>
           <small class="field-help" id="render-help">Choose a source with current permission. FFmpeg and FFprobe are required to render.</small>
         </div>
         <div class="preview panel">
@@ -75,6 +97,8 @@
           <div class="preview-footer"><span id="preview-profile-label">SOURCE · 9:16 FRAMING PREVIEW</span><span id="preview-status">Awaiting a source</span></div>
         </div>
       </div>
+      <div class="section-heading candidate-heading"><div><div class="eyebrow">MEASURED SIGNALS · HUMAN CHOICE</div><h2>Candidate clips</h2><p>Scene changes and quiet intervals are timing clues only. Candidates are never approved automatically.</p></div><button class="button" type="button" id="batch-render">Render selected accepted projects</button></div>
+      <div class="candidate-list" id="candidate-list"><div class="panel empty">Select an inspected source and find candidate clips to start.</div></div>
     </section>
     <section class="page" id="page-review"><div class="section-heading"><div><div class="eyebrow">HUMAN DECISION</div><h2>Review queue</h2><p>Only verified outputs appear here.</p></div></div><div class="review-list" id="review-list"><div class="panel empty">No outputs are waiting for review.</div></div></section>
     <section class="page" id="page-publishing"><div class="section-heading"><div><div class="eyebrow">PUBLISHING</div><h2>Manual by design</h2></div></div><div class="panel publishing-card"><div class="lock-icon">↗</div><div><h3>Uploads are disabled</h3><p>This local build does not connect to YouTube or any publishing service. An approval here only records your local human review decision; it never uploads a video.</p><span class="badge muted">CONNECTOR NOT CONFIGURED</span></div></div></section>

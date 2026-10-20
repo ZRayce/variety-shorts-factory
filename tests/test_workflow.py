@@ -69,8 +69,115 @@ class WorkflowTests(unittest.TestCase):
                     job = db.execute("SELECT id,status,captions_srt,crop_x,crop_y FROM jobs WHERE id='legacy-job'").fetchone()
                     version = db.execute("SELECT version FROM schema_version").fetchone()[0]
             self.assertEqual(tuple(job), ("legacy-job", "review", "1\\ncaption", 50, 50))
-            self.assertEqual(version, 5)
+            self.assertEqual(version, 8)
             self.assertTrue(database_path.with_name("legacy.v2.backup.sqlite3").is_file())
+
+    def test_edit_project_and_version_history_survive_database_reconnects(self):
+        project = core.create_edit_project(self.asset_id, {"title": "Persistent timeline", "profile": "short_vertical",
+            "content_preset": "podcast", "segments": [{"start_seconds": 1, "end_seconds": 4},
+            {"start_seconds": 5, "end_seconds": 8}]})
+        self.assertEqual(project["plan"]["schema_version"], 1)
+        self.assertEqual([segment["order"] for segment in project["plan"]["segments"]], [0, 1])
+        revised = core.update_edit_project(project["id"], {"title": "Saved timeline v2", "profile": "short_vertical",
+            "segments": [{"start_seconds": 2, "end_seconds": 8}]})
+        reloaded = core.get_edit_project(project["id"])
+        self.assertEqual(revised["current_version"], 2)
+        self.assertEqual(reloaded["plan"]["title"], "Saved timeline v2")
+        self.assertEqual(len(core.list_edit_project_versions(project["id"])), 2)
+
+    def test_candidate_discovery_persists_review_only_candidates_and_acceptance_creates_project(self):
+        with patch.object(core, "analyze_source", return_value={"scene_times": [4.0],
+                                                                 "silence_intervals": [(1.0, 1.4)],
+                                                                 "diagnostics": []}):
+            result = core.discover_candidates(self.asset_id, {"minimum_seconds": 2, "maximum_seconds": 6,
+                                                               "padding_before": 1, "padding_after": 1,
+                                                               "content_preset": "podcast",
+                                                               "transcript_cues": [{"start_seconds": 4, "end_seconds": 5,
+                                                                                    "text": "A timed question"}]})
+        self.assertEqual(len(result["candidates"]), 1)
+        candidate = result["candidates"][0]
+        self.assertEqual(candidate["status"], "pending")
+        self.assertIn("scene_change", candidate["signals"])
+        self.assertTrue(core.list_candidates(self.asset_id)[0]["score_factors"])
+        decision = core.update_candidate(candidate["id"], {"decision": "accepted", "title": "Good moment",
+            "hook": "A surprising answer", "notes": "Keep the question for context.",
+            "start_seconds": candidate["start_seconds"], "end_seconds": candidate["end_seconds"],
+            "transcript_cues": [{"start_seconds": 4, "end_seconds": 5, "text": "A timed question"}]})
+        self.assertEqual(decision["status"], "accepted")
+        project = core.get_edit_project(decision["project_id"])
+        self.assertEqual(project["plan"]["title"], "Good moment")
+        self.assertEqual(project["plan"]["segments"][0]["candidate_id"], candidate["id"])
+        self.assertEqual(project["plan"]["transcript_cues"][0]["text"], "A timed question")
+
+    def test_candidate_rejection_is_persisted_and_does_not_create_project(self):
+        with patch.object(core, "analyze_source", return_value={"scene_times": [], "silence_intervals": [],
+                                                                 "diagnostics": ["Scene filter unavailable"]}):
+            candidate = core.discover_candidates(self.asset_id, {"minimum_seconds": 2, "maximum_seconds": 4})["candidates"][0]
+        result = core.update_candidate(candidate["id"], {"decision": "rejected", "notes": "No useful context"})
+        self.assertEqual(result["status"], "rejected")
+        self.assertIsNone(result["project_id"])
+
+    def test_project_render_queues_ordered_segments_as_one_timeline(self):
+        project = core.create_edit_project(self.asset_id, {"title": "Two moments", "profile": "short_vertical",
+            "segments": [{"start_seconds": 1, "end_seconds": 4}, {"start_seconds": 6, "end_seconds": 9}]})
+        with patch.object(core.threading.Thread, "start", lambda _self: None):
+            queued = core.queue_project_render(project["id"])
+        job = core.get_job(queued["id"])
+        self.assertEqual(job["project_id"], project["id"])
+        self.assertEqual(json.loads(job["timeline_json"]), [
+            {"order": 0, "start_seconds": 1.0, "end_seconds": 4.0},
+            {"order": 1, "start_seconds": 6.0, "end_seconds": 9.0}])
+        output = core.OUTPUT_ROOT / "project-review-draft.mp4"
+        output.write_bytes(b"verified local review fixture")
+        with core.connect() as db:
+            db.execute("UPDATE jobs SET status='review',output_path=? WHERE id=?", (output.name, queued["id"]))
+        reviewed = core.review_job(queued["id"], {"decision": "approved", "notes": "Timeline reviewed locally."})
+        self.assertEqual(reviewed["status"], "approved")
+        saved_project = core.get_edit_project(project["id"])
+        self.assertEqual(saved_project["review_status"], "approved")
+        self.assertEqual(saved_project["review_notes"], "Timeline reviewed locally.")
+        self.assertEqual(core.list_edit_project_reviews(project["id"])[0]["project_version"], 1)
+        output.unlink(missing_ok=True)
+        with core.connect() as db:
+            db.execute("DELETE FROM project_reviews WHERE project_id=?", (project["id"],))
+            db.execute("DELETE FROM reviews WHERE job_id=?", (queued["id"],))
+            db.execute("DELETE FROM jobs WHERE id=?", (queued["id"],))
+            db.execute("DELETE FROM edit_projects WHERE id=?", (project["id"],))
+
+    def test_project_render_fails_closed_after_rights_version_changes(self):
+        project = core.create_edit_project(self.asset_id, {"title": "Rights-bound edit", "segments": [
+            {"start_seconds": 1, "end_seconds": 4}]})
+        core.record_permission(self.asset_id, {"creator_id": self.creator_id, "status": "granted",
+                                               "evidence": "Updated test permission"})
+        with self.assertRaises(core.APIError) as raised:
+            core.queue_project_render(project["id"])
+        self.assertEqual(raised.exception.status, 403)
+
+    def test_multi_segment_render_uses_ordered_concat_and_checks_total_duration(self):
+        with patch.object(core.threading.Thread, "start", lambda _self: None):
+            queued = core.queue_render(self.asset_id, {"profile": "long_horizontal", "segments": [
+                {"start_seconds": 1, "end_seconds": 4}, {"start_seconds": 6, "end_seconds": 9}]})
+        captured = {}
+
+        def fake_ffmpeg(job_id, args, log_path, timeout):
+            captured["filter"] = args[args.index("-filter_complex") + 1]
+            captured["inputs"] = args.count("-i")
+            Path(args[-1]).write_bytes(b"verified synthetic output")
+
+        media = {"duration": 6.0, "width": 1920, "height": 1080, "has_audio": True}
+        with patch.object(core, "resolve_executable", return_value="ffmpeg.exe"), \
+             patch.object(core, "run_render_process", side_effect=fake_ffmpeg), \
+             patch.object(core, "probe_output", return_value=media):
+            core.render_job(queued["id"])
+        self.assertEqual(captured["inputs"], 2)
+        self.assertIn("concat=n=2:v=1:a=0", captured["filter"])
+        self.assertIn("concat=n=2:v=0:a=1", captured["filter"])
+        job = core.get_job(queued["id"])
+        self.assertEqual(job["status"], "review")
+        core.remove_generated_file(core.OUTPUT_ROOT / job["output_path"], "test_output")
+        with core.connect() as db:
+            db.execute("DELETE FROM jobs WHERE id=?", (queued["id"],))
+
 
     def test_duplicate_active_render_returns_existing_job(self):
         with core.connect() as db:

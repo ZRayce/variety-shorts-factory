@@ -8,6 +8,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlsplit
+from unittest.mock import patch
 
 TEST_DATA = tempfile.TemporaryDirectory(prefix="vsf-api-tests-", dir=Path(__file__).parent)
 os.environ.setdefault("VSF_DATA_DIR", TEST_DATA.name)
@@ -92,6 +93,48 @@ class LocalWorkflowApiTests(unittest.TestCase):
         self.assertTrue(health["database_ok"])
         self.assertFalse(health["ai_editing_available"])
         self.assertFalse(health["publishing_enabled"])
+
+    def test_project_api_saves_and_reloads_versioned_ordered_timeline(self):
+        imported = json.loads(self.call("POST", "/api/import?filename=project-api.mp4", b"project api fixture")['body'])
+        creator = json.loads(self.call("POST", "/api/creators", json.dumps({"name": "Project API Creator"}).encode())['body'])
+        with core.connect() as db:
+            db.execute("UPDATE assets SET duration=20,width=640,height=360,has_audio=1 WHERE id=?", (imported["id"],))
+        permission = self.call("POST", f"/api/assets/{imported['id']}/permission", json.dumps({
+            "creator_id": creator["id"], "status": "granted", "evidence": "Local project API test permission"}).encode())
+        self.assertEqual(permission["code"], 200)
+        created = self.call("POST", f"/api/assets/{imported['id']}/projects", json.dumps({
+            "title": "Timeline from API", "segments": [{"start_seconds": 2, "end_seconds": 5},
+            {"start_seconds": 8, "end_seconds": 11}]}).encode())
+        self.assertEqual(created["code"], 201)
+        project = json.loads(created["body"])
+        self.assertEqual(project["plan"]["schema_version"], 1)
+        loaded = self.call("GET", f"/api/projects/{project['id']}")
+        self.assertEqual(loaded["code"], 200)
+        self.assertEqual([segment["order"] for segment in json.loads(loaded["body"])["plan"]["segments"]], [0, 1])
+        versions = self.call("GET", f"/api/projects/{project['id']}/versions")
+        self.assertEqual(len(json.loads(versions["body"])), 1)
+
+    def test_candidate_api_reports_filter_failure_as_warning_and_keeps_pending_review(self):
+        imported = json.loads(self.call("POST", "/api/import?filename=analysis-api.mp4", b"analysis api fixture")['body'])
+        creator = json.loads(self.call("POST", "/api/creators", json.dumps({"name": "Analysis API Creator"}).encode())['body'])
+        with core.connect() as db:
+            db.execute("UPDATE assets SET duration=20,width=640,height=360,has_audio=0 WHERE id=?", (imported["id"],))
+        self.call("POST", f"/api/assets/{imported['id']}/permission", json.dumps({
+            "creator_id": creator["id"], "status": "granted", "evidence": "Local candidate analysis test"}).encode())
+        with patch.object(core, "analyze_source", return_value={"scene_times": [], "silence_intervals": [],
+                                                                  "diagnostics": ["Scene filter unavailable"]}):
+            response = self.call("POST", f"/api/assets/{imported['id']}/discover", json.dumps({
+                "content_preset": "custom", "minimum_seconds": 4, "maximum_seconds": 8,
+                "padding_before": 1, "padding_after": 1}).encode())
+        self.assertEqual(response["code"], 201)
+        result = json.loads(response["body"])
+        self.assertTrue(result["diagnostics"])
+        self.assertTrue(all(item["status"] == "pending" for item in result["candidates"]))
+        listed = self.call("GET", f"/api/candidates?asset_id={imported['id']}")
+        self.assertEqual(listed["code"], 200)
+        listed_candidates = json.loads(listed["body"])
+        self.assertEqual(len(listed_candidates), len(result["candidates"]))
+        self.assertTrue(listed_candidates[0]["score_factors"])
 
     def test_generated_render_log_is_available_to_the_local_review_ui(self):
         path = core.LOG_ROOT / "api-pilot.log"
