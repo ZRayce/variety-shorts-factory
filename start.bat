@@ -1,4 +1,5 @@
 @echo off
+title ClipForge — Local video workbench
 setlocal
 cd /d "%~dp0"
 set "PYTHON_EXE=python"

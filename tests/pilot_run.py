@@ -43,6 +43,7 @@ def run_pilot() -> None:
         server = subprocess.Popen([sys.executable, "-m", "app.server"], cwd=ROOT, env=environment,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         base = f"http://127.0.0.1:{port}"
+        last_health = "no response"
         try:
             deadline = time.monotonic() + 12
             while time.monotonic() < deadline:
@@ -51,19 +52,28 @@ def run_pilot() -> None:
                     raise RuntimeError(f"Server exited during startup: {output[-1200:]}")
                 try:
                     status, _, health_body = call(f"{base}/api/health")
+                    last_health = f"HTTP {status}: {health_body[:500]!r}"
                     if status == 200:
                         break
                 except (TimeoutError, URLError, OSError):
                     time.sleep(0.2)
             else:
-                raise RuntimeError("Server did not become ready within 12 seconds.")
+                server.terminate()
+                try:
+                    server.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    server.kill()
+                    server.wait(timeout=5)
+                output = server.stdout.read() if server.stdout else ""
+                raise RuntimeError(f"Server did not become ready within 12 seconds ({last_health}). Startup output: {output[-1600:]}")
 
             page_status, _, page = call(base + "/")
-            assert page_status == 200 and b"Variety Shorts Factory" in page
+            assert page_status == 200 and b"ClipForge" in page
             style_status, _, style = call(base + "/static/style.css")
             script_status, _, script = call(base + "/static/app.js")
             assert style_status == 200 and b".review-video" in style and b"aspect-ratio:9/16" in style
-            assert script_status == 200 and b"/api/assets/" in script and b"/source" in script
+            assert script_status == 200 and b"/api/assets/" in script and b"/source" in script and b"/api/youtube-candidates" in script
+            assert b"/api/jobs/" in script and b"/cancel" in script
             health = json.loads(health_body)
             assert health["status"] == "ok" and health["publishing_enabled"] is False
 
@@ -75,6 +85,12 @@ def run_pilot() -> None:
             assert preview_status == 206 and preview_body == b"preview"
             assert preview_headers.get("Content-Range") == f"bytes 10-16/{len(preview_bytes)}"
             assert preview_headers.get_content_type() == "video/mp4"
+
+            log_path = Path(data_dir) / "logs" / "pilot.log"
+            log_path.write_text("synthetic pilot log", encoding="utf-8")
+            log_status, log_headers, log_body = call(f"{base}/api/files/logs/{log_path.name}")
+            assert log_status == 200 and log_body == b"synthetic pilot log", f"Unexpected render log response: {log_status}, {log_headers!r}, {log_body!r}"
+            assert log_headers.get_content_type() == "text/plain"
 
             filename = "pilot-synthetic.mp4"
             upload_status, _, upload_body = call(

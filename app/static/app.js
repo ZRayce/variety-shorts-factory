@@ -1,5 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { assets: [], creators: [], jobs: [], health: {} };
+const state = { assets: [], creators: [], jobs: [], youtube: [], health: {} };
 const routeTitles = { overview: 'Overview', creators: 'Creator sources', library: 'Clip library', editor: 'Editor', review: 'Review queue', publishing: 'Publishing', history: 'Production history', settings: 'Settings' };
 let activeEditorAssetId = '';
 
@@ -24,6 +24,11 @@ function duration(value) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
+function localDateTime(value) {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? '' : new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
 function badge(status) {
   const cls = status === 'granted' || status === 'approved' || status === 'inspected' ? 'good' : status === 'unverified' || status === 'inspection_required' || status === 'failed' ? 'warn' : 'muted';
   return `<span class="badge ${cls}">${escapeHtml(String(status).replaceAll('_', ' '))}</span>`;
@@ -41,7 +46,7 @@ function renderAssets() {
   } else {
     list.innerHTML = state.assets.map(asset => {
       const permission = asset.permission_valid ? asset.permission_status : asset.permission_status === 'granted' ? 'expired' : asset.permission_status;
-      return `<tr><td><b>${escapeHtml(asset.filename)}</b><br><small>${escapeHtml((asset.sha256 || '').slice(0, 14))}… · ${(asset.size_bytes / 1048576).toFixed(1)} MB</small></td><td>${badge(asset.status)}<br><small>${duration(asset.duration)}${asset.width ? ` · ${asset.width}×${asset.height}` : ''}</small></td><td>${badge(permission)}${asset.creator_name ? `<br><small>${escapeHtml(asset.creator_name)}</small>` : ''}</td><td><small>${new Date(asset.imported_at).toLocaleString()}</small></td><td>${asset.status === 'inspection_required' ? `<button class="table-action" data-inspect="${escapeHtml(asset.id)}">Inspect</button><br>` : ''}<button class="table-action" data-permission="${escapeHtml(asset.id)}">Rights record</button></td></tr>`;
+      return `<tr><td><b>${escapeHtml(asset.filename)}</b><br><small>${escapeHtml((asset.sha256 || '').slice(0, 14))}… · ${(asset.size_bytes / 1048576).toFixed(1)} MB</small></td><td>${badge(asset.status)}<br><small>${duration(asset.duration)}${asset.width ? ` · ${asset.width}×${asset.height}` : ''}</small></td><td>${badge(permission)}<br><small>Commercial: ${escapeHtml(asset.commercial_permission_valid ? 'cleared' : asset.commercial_permission_status || 'unverified')}</small>${asset.creator_name ? `<br><small>${escapeHtml(asset.creator_name)}</small>` : ''}</td><td><small>${new Date(asset.imported_at).toLocaleString()}</small></td><td>${asset.status === 'inspection_required' ? `<button class="table-action" data-inspect="${escapeHtml(asset.id)}">Inspect</button><br>` : ''}<button class="table-action" data-permission="${escapeHtml(asset.id)}">Rights record</button></td></tr>`;
     }).join('');
   }
   list.querySelectorAll('[data-permission]').forEach(button => button.addEventListener('click', () => openPermission(button.dataset.permission)));
@@ -50,7 +55,8 @@ function renderAssets() {
     try { await api(`/api/assets/${encodeURIComponent(button.dataset.inspect)}/inspect`, { method: 'POST' }); await refresh(); showNotice('Source metadata inspected successfully.'); }
     catch (error) { showNotice(error.message); button.disabled = false; }
   }));
-  const eligible = state.assets.filter(asset => asset.duration && asset.permission_valid);
+  const commercialRequired = $('#commercial-use').checked;
+  const eligible = state.assets.filter(asset => asset.duration && asset.permission_valid && (!commercialRequired || asset.commercial_permission_valid));
   $('#edit-asset').innerHTML = '<option value="">Select a source…</option>' + state.assets.map(asset => {
     const permission = asset.permission_valid ? asset.permission_status : asset.permission_status === 'granted' ? 'expired' : asset.permission_status;
     return `<option value="${escapeHtml(asset.id)}">${escapeHtml(asset.filename)} · ${escapeHtml(permission)}</option>`;
@@ -63,18 +69,37 @@ function renderAssets() {
   if (!eligible.length) $('#edit-asset').title = 'Import, inspect, and record current permission for a source first.';
 }
 
+function renderYoutubeCandidates() {
+  const list = $('#youtube-list');
+  if (!list) return;
+  list.innerHTML = state.youtube.length ? state.youtube.map(candidate => `<tr><td><a href="${escapeHtml(candidate.url)}" target="_blank" rel="noopener noreferrer">Open video on YouTube ↗</a><br><small>Reference only · no media fetched</small></td><td><code>${escapeHtml(candidate.video_id)}</code></td><td>${badge(candidate.status)}</td></tr>`).join('') : '<tr><td colspan="3" class="empty">No YouTube references saved.</td></tr>';
+}
+
 function renderCreators() {
   $('#creator-select').innerHTML = '<option value="">Select a creator…</option>' + state.creators.map(creator => `<option value="${escapeHtml(creator.id)}">${escapeHtml(creator.name)}</option>`).join('');
   const list = $('#creator-list');
   if (list) list.innerHTML = state.creators.length ? state.creators.map(creator => `<tr><td><b>${escapeHtml(creator.name)}</b></td><td>${creator.source_url ? `<a href="${escapeHtml(creator.source_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(creator.source_url)}</a>` : '—'}</td><td><small>${new Date(creator.created_at).toLocaleString()}</small></td></tr>`).join('') : '<tr><td colspan="3" class="empty">No creator records yet.</td></tr>';
 }
 
+function qualitySummary(source) {
+  try {
+    const report = JSON.parse(source);
+    const checks = Array.isArray(report.checks) ? report.checks : [];
+    const summary = checks.map(check => `${escapeHtml(check.name)}: ${escapeHtml(check.status)}`).join(' · ');
+    const warnings = Array.isArray(report.warnings) ? report.warnings.map(escapeHtml).join('<br>') : '';
+    return `<p>QA ${escapeHtml(report.quality_status || 'UNKNOWN')} · ${escapeHtml(report.width)} × ${escapeHtml(report.height)} · ${duration(report.duration)}</p>${summary ? `<p>${summary}</p>` : ''}${warnings ? `<p>Warnings: ${warnings}</p>` : ''}`;
+  } catch {
+    return '<p>Quality report could not be read.</p>';
+  }
+}
+
 function renderJobs() {
-  const review = state.jobs.filter(job => ['review', 'approved', 'changes_requested', 'rejected', 'failed'].includes(job.status));
+  const review = state.jobs.filter(job => ['queued', 'running', 'review', 'approved', 'changes_requested', 'rejected', 'failed'].includes(job.status));
   const list = $('#review-list');
-  list.innerHTML = review.length ? review.map(job => `<article class="panel review-card">${job.output_path ? `<video class="review-video" controls preload="metadata" src="/api/files/outputs/${encodeURIComponent(job.output_path)}"></video>` : '<div class="review-thumb">No rendered file</div>'}<div><h3>${escapeHtml(job.filename)} · ${duration(job.end_seconds - job.start_seconds)}</h3><p>Preset: ${escapeHtml(job.preset)} · Status: ${escapeHtml(job.status)}${job.editorial_notes ? `<br>Editorial notes: ${escapeHtml(job.editorial_notes)}` : ''}</p>${job.quality_report ? `<p>Verified output: ${escapeHtml(JSON.parse(job.quality_report).width)} × ${escapeHtml(JSON.parse(job.quality_report).height)} · ${duration(JSON.parse(job.quality_report).duration)}</p>` : ''}${job.error_category ? `<p>Failure: ${escapeHtml(job.error_category)} · ${escapeHtml(job.diagnostic || '')}</p>` : ''}</div><div class="review-actions">${job.status === 'review' ? `<button class="button primary" data-review="${escapeHtml(job.id)}" data-decision="approved">Approve locally</button><button class="button" data-review="${escapeHtml(job.id)}" data-decision="changes_requested">Request changes</button>` : job.status === 'failed' && job.retry_safe ? `<button class="button" data-retry="${escapeHtml(job.id)}">Retry safely</button>` : badge(job.status)}</div></article>`).join('') : '<div class="panel empty">No outputs are waiting for review. Failed jobs appear here with recorded recovery status.</div>';
+  list.innerHTML = review.length ? review.map(job => `<article class="panel review-card" data-profile="${escapeHtml(job.profile || 'short_vertical')}">${job.output_path ? `<video class="review-video" controls preload="metadata" src="/api/files/outputs/${encodeURIComponent(job.output_path)}"></video>` : `<div class="review-thumb">${['queued', 'running'].includes(job.status) ? 'Local render' : 'No rendered file'}</div>`}<div><h3>${escapeHtml(job.filename)} · ${duration(job.end_seconds - job.start_seconds)}</h3><p>${escapeHtml(job.profile || 'short_vertical')} · Preset: ${escapeHtml(job.preset)} · Status: ${escapeHtml(job.status)}${job.stage ? ` · ${escapeHtml(job.stage)}` : ''}${job.editorial_notes ? `<br>Editorial notes: ${escapeHtml(job.editorial_notes)}` : ''}</p>${job.quality_report ? qualitySummary(job.quality_report) : ''}${job.error_category ? `<p>Failure: ${escapeHtml(job.error_category)} · ${escapeHtml(job.diagnostic || '')}</p>` : ''}${job.log_path ? `<p><a href="/api/files/logs/${encodeURIComponent(job.log_path)}" target="_blank" rel="noopener noreferrer">Open render log</a></p>` : ''}</div><div class="review-actions">${job.status === 'review' ? `<button class="button primary" data-review="${escapeHtml(job.id)}" data-decision="approved">Approve locally</button><button class="button" data-review="${escapeHtml(job.id)}" data-decision="changes_requested">Request changes</button>` : job.status === 'failed' && job.retry_safe ? `<button class="button" data-retry="${escapeHtml(job.id)}">Retry safely</button>` : ['queued', 'running'].includes(job.status) ? `<button class="button" data-cancel="${escapeHtml(job.id)}">Cancel job</button>` : badge(job.status)}</div></article>`).join('') : '<div class="panel empty">No queued jobs or drafts are waiting for review.</div>';
   list.querySelectorAll('[data-review]').forEach(button => button.addEventListener('click', () => decideReview(button.dataset.review, button.dataset.decision)));
   list.querySelectorAll('[data-retry]').forEach(button => button.addEventListener('click', () => retryRender(button.dataset.retry, button)));
+  list.querySelectorAll('[data-cancel]').forEach(button => button.addEventListener('click', () => cancelRender(button.dataset.cancel, button)));
 }
 
 function renderHistory(events) {
@@ -87,7 +112,9 @@ function renderSettings() {
     ['Application', 'Local-only · 127.0.0.1'],
     ['Media engine', `FFmpeg ${state.health.ffmpeg_available ? 'available' : 'missing'} · FFprobe ${state.health.ffprobe_available ? 'available' : 'missing'}`],
     ['Publishing', 'Disabled · no upload connector configured'],
-    ['Database', state.health.data_dir ? `${state.health.data_dir}\\factory.sqlite3` : 'Unavailable'],
+    ['AI editing', 'Unavailable · no local AI model or analysis module configured'],
+    ['YouTube links', 'Reference only · no media download or scraping'],
+    ['Database', state.health.data_dir ? `${state.health.database_ok ? 'Healthy' : 'Check failed'} · ${state.health.data_dir}\\factory.sqlite3` : 'Unavailable'],
     ['Source files', state.health.data_dir ? `${state.health.data_dir}\\sources` : 'Unavailable'],
     ['Rendered files', state.health.data_dir ? `${state.health.data_dir}\\outputs` : 'Unavailable'],
   ];
@@ -109,16 +136,28 @@ function renderSourceMeta() {
   if (asset.id !== activeEditorAssetId) {
     activeEditorAssetId = asset.id;
     $('#start').value = 0;
-    $('#end').value = asset.duration ? Math.min(30, Math.floor(asset.duration)) : 30;
+    $('#end').value = asset.duration ? Math.min($('#render-profile').value === 'short_vertical' ? 30 : 300, Math.floor(asset.duration)) : 30;
     $('#crop-x').value = 50;
     $('#crop-y').value = 50;
   }
   const permission = asset.permission_valid ? asset.permission_status : asset.permission_status === 'granted' ? 'expired' : asset.permission_status;
-  $('#source-meta').textContent = `${asset.creator_name || 'Creator not linked'} · ${duration(asset.duration)} · permission ${permission} · ${asset.status}`;
-  const ready = Boolean(asset.duration && asset.permission_valid && state.health.ffmpeg_available && state.health.ffprobe_available);
+  const audioState = asset.has_audio == null ? 'audio not inspected' : asset.has_audio ? 'source audio present' : 'no source audio';
+  $('#source-meta').textContent = `${asset.creator_name || 'Creator not linked'} · ${duration(asset.duration)} · ${audioState} · permission ${permission} · ${asset.status}`;
+  const commercial = $('#commercial-use').checked;
+  const ready = Boolean(asset.duration && asset.permission_valid && (!commercial || asset.commercial_permission_valid) && state.health.ffmpeg_available && state.health.ffprobe_available);
   $('#render-button').disabled = !ready;
-  $('#render-button').title = ready ? '' : 'Requires inspected media, current creator permission, FFmpeg, and FFprobe.';
-  $('#render-help').textContent = !asset.duration ? 'Inspect this source with FFprobe before rendering.' : !asset.permission_valid ? 'Record current creator permission before rendering.' : !state.health.ffmpeg_available || !state.health.ffprobe_available ? 'Install or configure FFmpeg and FFprobe, then restart the app to render.' : 'SRT captions are burned into the output. Upload and publishing are disabled.';
+  $('#render-button').title = ready ? '' : 'Requires inspected media, applicable current rights, FFmpeg, and FFprobe.';
+  $('#render-help').textContent = !asset.duration ? 'Inspect this source with FFprobe before rendering.' : !asset.permission_valid ? 'Record current editing permission before rendering.' : commercial && !asset.commercial_permission_valid ? 'Commercial use is selected; record separate current commercial clearance.' : !state.health.ffmpeg_available || !state.health.ffprobe_available ? 'Install or configure FFmpeg and FFprobe, then restart the app to render.' : [0, false].includes(asset.has_audio) ? 'This source has no audio track. The output will also have no audio; the QA report will disclose this.' : 'Source audio is preserved. Captions are burned into the output. Review the rendered file before approval.';
+  const vertical = $('#render-profile').value === 'short_vertical';
+  $('#start').max = asset.duration || '';
+  const maximumCut = asset.duration ? Math.min(asset.duration, vertical ? 60 : asset.duration) : null;
+  $('#end').max = maximumCut == null ? '' : maximumCut;
+  if (maximumCut != null && Number($('#end').value) > maximumCut) $('#end').value = maximumCut;
+  if (Number($('#start').value) >= Number($('#end').value)) $('#start').value = 0;
+  $('#frame-label').textContent = vertical ? 'VERTICAL FRAMING' : 'WIDESCREEN FRAMING';
+  $('#preview-profile-label').textContent = vertical ? 'SOURCE · 9:16 FRAMING PREVIEW' : 'SOURCE · 16:9 FRAMING PREVIEW';
+  const placeholder = $('#preview-screen .preview-placeholder');
+  if (placeholder) placeholder.style.aspectRatio = vertical ? '9/16' : '16/9';
   $('#preview-screen').innerHTML = `<video id="source-video" class="editor-video source-video" controls playsinline preload="metadata" src="/api/assets/${encodeURIComponent(asset.id)}/source"></video>`;
   $('#set-in').disabled = false;
   $('#set-out').disabled = false;
@@ -139,12 +178,12 @@ function updateCropPreview() {
 }
 
 async function refresh() {
-  [state.health, state.assets, state.creators, state.jobs] = await Promise.all([
-    api('/api/health'), api('/api/assets'), api('/api/creators'), api('/api/jobs')
+  [state.health, state.assets, state.creators, state.jobs, state.youtube] = await Promise.all([
+    api('/api/health'), api('/api/assets'), api('/api/creators'), api('/api/jobs'), api('/api/youtube-candidates')
   ]);
-  renderAssets(); renderCreators(); renderJobs(); renderSettings(); renderSourceMeta();
-  $('#engine-status').textContent = state.health.ffmpeg_available ? 'FFmpeg ready' : 'FFmpeg unavailable';
-  if (!state.health.ffmpeg_available || !state.health.ffprobe_available) {
+  renderAssets(); renderCreators(); renderJobs(); renderSettings(); renderSourceMeta(); renderYoutubeCandidates();
+  $('#engine-status').textContent = state.health.ffmpeg_available && state.health.ffprobe_available ? 'FFmpeg + FFprobe ready' : 'Media tools unavailable';
+  if (!state.health.ffmpeg_available || !state.health.ffprobe_available || !state.health.database_ok) {
     $('#engine-status').style.color = 'var(--orange)';
   }
   const active = (location.hash.slice(1) || 'overview').toLowerCase();
@@ -173,10 +212,19 @@ async function importFiles(files) {
 }
 
 async function openPermission(assetId) {
+  const asset = state.assets.find(item => item.id === assetId);
   $('#permission-asset').value = assetId;
-  $('#permission-evidence').value = '';
-  $('#permission-status').value = 'granted';
-  $('#permission-expiry').value = '';
+  $('#permission-evidence').value = asset?.permission_evidence || '';
+  $('#permission-status').value = asset?.permission_status || 'unverified';
+  $('#permission-expiry').value = asset?.permission_expires_at ? localDateTime(asset.permission_expires_at) : '';
+  $('#commercial-status').value = asset?.commercial_permission_status || 'unverified';
+  $('#commercial-evidence').value = asset?.commercial_permission_evidence || '';
+  $('#commercial-expiry').value = asset?.commercial_permission_expires_at ? localDateTime(asset.commercial_permission_expires_at) : '';
+  $('#source-url').value = asset?.source_url || '';
+  $('#license-reference').value = asset?.license_reference || '';
+  $('#attribution').value = asset?.attribution || '';
+  $('#restrictions').value = asset?.restrictions || '';
+  if (asset?.creator_id) $('#creator-select').value = asset.creator_id;
   if (!state.creators.length) {
     location.hash = '#creators';
     showNotice('Add the creator record first, then attach it to this asset.');
@@ -189,10 +237,11 @@ $('#permission-form').addEventListener('submit', async event => {
   if (event.submitter?.value === 'cancel') return;
   event.preventDefault();
   const expires = $('#permission-expiry').value ? new Date($('#permission-expiry').value).toISOString() : null;
+  const commercialExpires = $('#commercial-expiry').value ? new Date($('#commercial-expiry').value).toISOString() : null;
   try {
     await api(`/api/assets/${encodeURIComponent($('#permission-asset').value)}/permission`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ creator_id: $('#creator-select').value, status: $('#permission-status').value, evidence: $('#permission-evidence').value, expires_at: expires }),
+      body: JSON.stringify({ creator_id: $('#creator-select').value, status: $('#permission-status').value, evidence: $('#permission-evidence').value, expires_at: expires, commercial_status: $('#commercial-status').value, commercial_evidence: $('#commercial-evidence').value, commercial_expires_at: commercialExpires, source_url: $('#source-url').value, license_reference: $('#license-reference').value, attribution: $('#attribution').value, restrictions: $('#restrictions').value }),
     });
     $('#permission-dialog').close();
     await refresh();
@@ -210,7 +259,18 @@ $('#creator-form').addEventListener('submit', async event => {
   } catch (error) { showNotice(error.message); }
 });
 
+$('#youtube-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  try {
+    await api('/api/youtube-candidates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: $('#youtube-url').value }) });
+    $('#youtube-form').reset();
+    await refresh();
+    showNotice('YouTube link saved as a reference. Add an authorized local media file before editing.');
+  } catch (error) { showNotice(error.message); }
+});
+
 async function decideReview(jobId, decision) {
+  if (decision === 'approved' && !window.confirm('Approve this verified draft locally? This will not upload or publish it.')) return;
   try {
     await api(`/api/jobs/${encodeURIComponent(jobId)}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, notes: '' }) });
     await refresh();
@@ -240,12 +300,24 @@ async function retryRender(jobId, button) {
   } catch (error) { showNotice(error.message); await refresh(); }
 }
 
+async function cancelRender(jobId, button) {
+  if (!window.confirm('Cancel this render and discard any partial output?')) return;
+  button.disabled = true;
+  try {
+    const result = await api(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    await refresh();
+    showNotice(result.status === 'cancelled' ? 'Queued render cancelled.' : 'Cancellation requested. ClipForge will remove the partial output when FFmpeg stops.');
+  } catch (error) { showNotice(error.message); button.disabled = false; }
+}
+
 $('#open-import').addEventListener('click', () => { $('#import-panel').hidden = !$('#import-panel').hidden; });
 $('#file-input').addEventListener('change', event => importFiles([...event.target.files]));
 $('#drop-zone').addEventListener('dragover', event => { event.preventDefault(); event.currentTarget.classList.add('drag'); });
 $('#drop-zone').addEventListener('dragleave', event => event.currentTarget.classList.remove('drag'));
 $('#drop-zone').addEventListener('drop', event => { event.preventDefault(); event.currentTarget.classList.remove('drag'); importFiles([...event.dataTransfer.files]); });
 $('#edit-asset').addEventListener('change', renderSourceMeta);
+$('#render-profile').addEventListener('change', renderSourceMeta);
+$('#commercial-use').addEventListener('change', () => { renderAssets(); renderSourceMeta(); });
 $('#crop-x').addEventListener('input', updateCropPreview);
 $('#crop-y').addEventListener('input', updateCropPreview);
 $('#preset').addEventListener('change', updateCropPreview);
@@ -274,11 +346,11 @@ $('#render-button').addEventListener('click', async () => {
   try {
     const queued = await api(`/api/assets/${encodeURIComponent(assetId)}/render`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ start_seconds: Number($('#start').value), end_seconds: Number($('#end').value), preset: $('#preset').value, crop_x: Number($('#crop-x').value), crop_y: Number($('#crop-y').value), editorial_notes: $('#editorial-notes').value, captions_srt: $('#captions-srt').value }),
+      body: JSON.stringify({ start_seconds: Number($('#start').value), end_seconds: Number($('#end').value), profile: $('#render-profile').value, commercial_use: $('#commercial-use').checked, preset: $('#preset').value, crop_x: Number($('#crop-x').value), crop_y: Number($('#crop-y').value), editorial_notes: $('#editorial-notes').value, captions_srt: $('#captions-srt').value }),
     });
-    await waitForRender(queued.id);
     await refresh();
-    showNotice('Render completed and passed output verification. Open the review queue for a human decision.');
+    location.hash = '#review';
+    showNotice(`Render queued (${queued.id.slice(0, 8)}). The local queue processes one job at a time.`);
   } catch (error) { $('#preview-status').textContent = 'Render failed or is still running'; showNotice(error.message); await refresh(); }
   finally { renderSourceMeta(); }
 });
@@ -286,3 +358,6 @@ $('#render-button').addEventListener('click', async () => {
 window.addEventListener('hashchange', navigate);
 navigate();
 refresh().catch(error => showNotice(`Could not connect to the local API: ${error.message}`));
+window.setInterval(() => {
+  if (state.jobs.some(job => ['queued', 'running'].includes(job.status))) refresh().catch(error => showNotice(error.message));
+}, 3000);

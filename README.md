@@ -1,74 +1,114 @@
-# Variety Shorts Factory
+# ClipForge
 
-A local-first Windows workstation for creator-supplied media. The working local pipeline provides import, SHA-256 duplicate detection, creator and permission records, timestamped vertical rendering with validated SRT captions, output verification, a persistent review queue, safe retry/recovery states, and an audit trail. It is not a clip downloader or publishing tool.
+ClipForge is a local-first Windows video drafting workbench. It imports creator-supplied files, tracks editing and commercial-use permissions separately, queues FFmpeg jobs, validates outputs, and requires a human review decision. It does not publish or upload videos.
 
-## Current implementation
+The existing dependency-free browser interface is retained and served from a loopback-only Python server. It runs in the user's browser at `http://127.0.0.1:8765`; it is not a cloud service or a native desktop executable.
 
-- Standard-library threaded localhost API and a responsive, dependency-free browser interface.
-- Versioned SQLite schema migration, foreign keys, interrupted-job recovery, and persistent workflow records.
-- Streaming upload to a managed local source folder. Imported originals are never edited in place.
-- Supported imports: MP4, MOV, WebM. Defaults: 2 GiB per file, four hours maximum source duration.
-- Permission begins as **unverified**. Rendering requires a linked creator, a granted permission record, and an unexpired (or non-expiring) permission record.
-- The editor streams the selected local source for playback and timestamp scrubbing, supports playhead in/out buttons, 0–100% horizontal/vertical portrait framing, three crop/zoom presets, editorial notes, and optional Unicode SRT captions. Crop settings are stored with each render job.
-- FFprobe inspects source duration, dimensions, and audio presence. FFmpeg renders a 1080×1920 crop using the chosen framing and preset; FFprobe verifies the result before it enters review.
-- Duplicate active render submissions return the existing job. Only explicitly safe failures may be retried, up to three times.
-- Review decisions persist locally and cannot be overwritten; make a new render to submit a changed edit. There is no upload connector and no automatic publishing.
-- State-changing requests enforce same-origin localhost use. The server binds to `127.0.0.1` and sets a restrictive Content Security Policy.
+## Current capabilities
 
-An AI editing assistant, model-generated edit decisions, Twitch/YouTube discovery, remote acquisition, thumbnail generation, automatic caption transcription, long-form moment detection, OAuth, and YouTube publishing are not implemented. Editing is currently user-directed with FFmpeg. A public URL does not grant media or reuse rights. No live APIs are called.
+- Multi-file local import for MP4, MOV, WebM, MKV, and AVI, streamed to managed storage with SHA-256 duplicate detection. File extension is not treated as proof of valid video.
+- Creator/source records and versioned rights records, including editing permission, separate commercial-use permission, evidence references, optional expiry, source URL, license reference, attribution, restrictions, and date checked.
+- Rendering is blocked unless editing permission is current. Commercial-use jobs additionally require current commercial-use clearance. Approval rechecks the current rights-record version and draft file.
+- YouTube links can be saved as references. Link handling extracts and stores a video ID only; it does not fetch metadata, download, scrape, inspect, or create local media. A reference remains **MEDIA REQUIRED** until the user imports an authorized local file and records its rights.
+- Two fixed output profiles: vertical 1080×1920 with a 60-second limit and widescreen 1920×1080 bounded by source duration. Users can scrub, set in/out points, adjust crop anchors, choose one of three crop/zoom formulas, and add validated SRT captions.
+- Persistent queued jobs that resume after restart, one FFmpeg process at a time, safe queued/running cancellation, bounded diagnostic logs, retry for safe dependency/interruption failures, a conservative free-space check, temporary render output, and output verification with FFprobe.
+- Draft preview, quality report, render logs, explicit local approval confirmation, and retry/reject/request-changes states. Approval never publishes.
+- Local health page reports the database, FFmpeg, FFprobe, publishing, and AI capability state.
+- SQLite schema migrations create a pre-migration backup rather than replacing existing records. Originals are never edited in place.
+
+## AI editing status
+
+AI editing is **not implemented**. No local model, speech recognizer, scene analyzer, highlight ranker, or AI edit-decision planner is bundled or configured. The current editing formulas are deterministic FFmpeg transforms controlled by the user; ClipForge does not claim to understand footage or choose good moments. No model is downloaded automatically.
+
+## YouTube link and rights rules
+
+A YouTube link is a reference only. It cannot be selected as render media. Use an authorized video file that you already have, import it locally, and record the actual grant and restrictions. Finding a public video or saving its URL does not establish reuse rights. ClipForge stores evidence supplied by the user and does not independently verify ownership, monetization eligibility, or legal scope.
 
 ## Architecture
 
-`app/main.py` contains the SQLite schema, media validation, workflow operations, and FFmpeg worker. `app/server.py` provides the standard-library threaded localhost HTTP server. `app/static/` contains the browser application. The worker runs one render at a time in-process. `start.bat` starts the server bound only to loopback. The backend has no third-party Python runtime dependencies. Data is outside the repository by default.
+- `app/main.py`: local SQLite schema, validation, rights gates, import, queue, render process, quality report, and review functions.
+- `app/server.py`: standard-library threaded WSGI server, loopback binding, API routing, same-origin protection, and streamed media previews.
+- `app/static/`: semantic HTML, vanilla JavaScript, and responsive CSS.
+- `tests/`: standard-library unit, API, workflow, mocked-render, and disposable TCP pilot checks.
+- `samples/`: neutral SRT sample and an example rights ledger whose entries are explicitly unverified.
 
-## Setup and launch
+The backend has no third-party Python runtime dependencies. SQLite metadata and media are stored outside the repository by default. The legacy `VarietyShortsFactory` data directory is kept as the default so earlier local records are not silently orphaned.
 
-1. Install Python 3.11+ from [python.org](https://www.python.org/downloads/windows/). No Python packages are required.
-2. Install FFmpeg and FFprobe from the official [FFmpeg download page](https://ffmpeg.org/download.html), which links to Windows builds. Extract a trusted build and set `VSF_FFMPEG` and `VSF_FFPROBE` to the executable paths, or add the trusted `bin` directory to your user PATH. The app does not download or execute an installer.
-3. Double-click `start.bat`. The API listens on `http://127.0.0.1:8765`.
-4. To stop, focus the startup window and press **Ctrl+C**.
+## Windows setup and launch
 
-Optional configuration can be set in the shell or in a project `.env` file: `VSF_DATA_DIR`, `VSF_PORT`, `VSF_MAX_UPLOAD_BYTES`, `VSF_MAX_SOURCE_SECONDS`, `VSF_FFMPEG`, and `VSF_FFPROBE`. Environment variables take precedence over `.env` values.
+1. Install Python 3.11 or newer.
+2. Ensure `ffmpeg.exe` and `ffprobe.exe` are available on PATH. Verify in PowerShell:
 
-Default storage locations:
+   ```powershell
+   ffmpeg -version
+   ffprobe -version
+   ```
 
-- Database and audit events: `%USERPROFILE%\Videos\VarietyShortsFactory\factory.sqlite3`
-- Original imported copies: `%USERPROFILE%\Videos\VarietyShortsFactory\sources`
-- Rendered versions: `%USERPROFILE%\Videos\VarietyShortsFactory\outputs`
-- Thumbnails: `%USERPROFILE%\Videos\VarietyShortsFactory\thumbnails`
+   If not installed, use a trusted Windows build linked from [FFmpeg's official download page](https://ffmpeg.org/download.html). ClipForge does not install or update FFmpeg for you. You can instead set `VSF_FFMPEG` and `VSF_FFPROBE` to full executable paths in a local `.env` file.
+3. Double-click [`START_CLIPFORGE.bat`](START_CLIPFORGE.bat). The older [`start.bat`](start.bat) launcher remains available.
+4. Open `http://127.0.0.1:8765` in a browser. Keep the console window open. Press **Ctrl+C** in that window to stop ClipForge.
 
-The first run creates these folders without replacing existing data. Back up the database and media folders together. Do not put private media or credentials in this Git repository.
+No `pip install` step is needed. `requirements.txt` is included to make the zero-dependency runtime explicit.
 
-## Workflow
+Optional settings are listed in [`.env.example`](.env.example). Copy it to `.env` to use them; `.env` is ignored by Git. Environment variables already set in Windows take precedence. The default data folder is `%USERPROFILE%\Videos\VarietyShortsFactory` and contains:
 
-1. Import a creator-supplied media file from **Clip library**. The app records its SHA-256 and marks permission unverified.
-2. Add the creator in **Creator sources**. Use **Rights record** for each source to record evidence, status, and optional expiry. Only record a grant if you have actually reviewed the permission.
-3. Select the inspected, permitted source in **Editor**, play and scrub the source, use **Set In/Out at playhead**, adjust the portrait frame, choose a crop preset, optionally load or paste a UTF-8 SRT file, and add editorial notes. SRT timestamps are relative to the selected clip and validated before rendering.
-4. Render locally. The app fails the job if FFmpeg is unavailable and only queues output for review after FFprobe verifies 1080×1920 dimensions and duration.
-5. Approve or request changes in **Review queue**. Approval is a local record only.
+- `factory.sqlite3` and permission-history backups
+- `sources\` imported copies
+- `outputs\` verified drafts
+- `logs\` FFmpeg diagnostics
+- `thumbnails\` reserved for local preview assets
 
-If FFprobe is missing, a file can be imported but its inspection status is `inspection_required`; rendering is blocked. Once configured, use the asset's **Inspect** action without reimporting. If FFmpeg is missing, rendering fails with a recorded, retryable dependency error. Install a trusted FFmpeg build and configure the executable paths.
+Back up the database and media folders together. Do not put personal media or API keys in this repository.
 
-## Tests
+## First-run smoke walkthrough
 
-Run `python -m unittest discover -s tests -v` for the standard-library regression suite. Run `python tests/pilot_run.py` for a disposable TCP pilot of the actual localhost server, UI, import, seeking, permission, persistence, and missing-tool gates. The pilot uses synthetic bytes and temporary storage, not private or creator media. A mocked render exercises output verification and caption handoff. A real encode still requires FFmpeg/FFprobe and creator-authorized sample media; live platform integrations have not been implemented or tested.
+This creates an original synthetic clip with FFmpeg; it does not use copyrighted footage. Run in PowerShell after verifying FFmpeg is installed:
 
-## Security assumptions and limitations
+```powershell
+ffmpeg -f lavfi -i testsrc=size=1280x720:rate=30 -f lavfi -i sine=frequency=440:sample_rate=44100 -t 12 -c:v libx264 -pix_fmt yuv420p -c:a aac "$env:TEMP\clipforge-synthetic.mp4"
+```
 
-- Intended for one user on the local Windows machine. It binds to IPv4 loopback and rejects unexpected Host headers and cross-origin state-changing requests. It has no account system, encryption-at-rest layer, or multi-user authorization.
-- Files and uploaded metadata are treated as untrusted. Filenames are reduced to a supported basename; uploads stream to bounded temporary files; FFmpeg receives an argument array rather than a shell command. Browser output is protected by escaping, same-origin checks, and a restrictive Content Security Policy.
-- Import is not a rights determination. Permission evidence is a user-supplied record and does not guarantee copyright compliance or monetization.
-- The app does not download media, contact platform APIs, upload videos, or expose local files publicly.
-- Use only creator-provided files or media acquired through a permitted route. Keep original media backups and verify the scope of the creator's grant.
+Then:
 
-## Troubleshooting
+1. Start ClipForge and import `%TEMP%\clipforge-synthetic.mp4` from **Clip library**.
+2. Add a creator named `Local synthetic test`.
+3. Open that asset's **Rights record**. Mark editing permission granted and use the evidence note `Synthetic test clip generated locally for this test`. Keep commercial permission unverified unless you specifically want to test that separate gate.
+4. Select **Inspect** on the asset. Once FFprobe reports the video duration and dimensions, open **Editor**.
+5. Render a 5–8 second `Shorts · Vertical` draft and wait for it to appear in the queue. A separate `Long-form · Widescreen` render can be queued from the same source.
+6. Review the output inline, inspect its quality report and log, then approve it locally if the video looks right. Approval does not upload anything.
+7. Delete the synthetic clip yourself when finished; ClipForge never automatically removes source media.
 
-- **Browser cannot connect:** keep the startup window open and confirm it reports the local URL. Another process may already use port 8765; set `VSF_PORT` to a free local port.
-- **Inspection required:** set `VSF_FFPROBE` to the full path of `ffprobe.exe`, restart, and select **Inspect** on the existing asset.
-- **Render fails / missing dependency:** set `VSF_FFMPEG` to the full path of `ffmpeg.exe` and check the Production history page.
-- **Disk/storage error:** check free space and access to the configured data directory. Files are not automatically deleted.
-- **Permission gate:** confirm that the correct creator is linked and the record is granted and not expired or revoked.
+## Tests and pilot run
 
-## Verification status
+Run from the project root:
 
-The workspace and installed tools were inspected before implementation. No FFmpeg/FFprobe executable or Pytest installation was found. The unit suite and mocked render flow pass, but the real-media acceptance workflow cannot be completed until FFmpeg/FFprobe and authorized sample footage are available. Uploading/publishing is disabled by design.
+```powershell
+python -m unittest discover -s tests -v
+node --check app/static/app.js
+python -m compileall -q app tests
+python tests/pilot_run.py
+```
+
+The unit suite exercises URL parsing, rights and commercial gates, profile bounds, migrations and backups, queue transitions, queued cancellation, output verification, log handling, and render-failure cleanup. The pilot starts the real loopback HTTP server with temporary data and tests HTML/CSS/JavaScript delivery, health, upload, seeking, permission gates, persistence, and unavailable-media-tool behavior. Render calls are mocked in regression tests.
+
+The current workstation had Python and Node but no FFmpeg or FFprobe on PATH. The TCP pilot passed; real probing, a real encode, subtitle-filter validation, and running-FFmpeg cancellation could not be exercised here. Once both executables are installed, the synthetic walkthrough above is the real-media smoke test. Do not interpret mocked render tests as evidence of a real encode.
+
+## Security and data assumptions
+
+- Designed for one user on one Windows machine. The HTTP server binds to `127.0.0.1`, checks Host and cross-origin state changes, and sends restrictive browser security headers. It has no login, encryption-at-rest, or multi-user authorization.
+- All file, URL, caption, and JSON inputs are treated as untrusted. Uploads have a configured byte cap; source names are sanitized; managed paths are resolved under their expected folders; API SQL is parameterized; FFmpeg receives a fixed argument array with no shell execution.
+- FFmpeg writes to a temporary file. Only a successful, nonempty output that FFprobe validates for profile dimensions, duration, and expected audio presence can enter review. Existing output names are preserved on collision.
+- FFmpeg logs go to disk, not an unbounded in-memory capture buffer. The UI shows job status without inventing a progress percentage.
+- No telemetry, analytics, background internet requests, platform API calls, downloads, publishing, or automatic deletion are implemented.
+- Database migration backup is created next to the database as `factory.vN.backup.sqlite3`; retain it until the upgraded app has been checked.
+
+## Known limitations and next work
+
+- No AI, automatic transcription, scene detection, highlight selection, face-aware framing, timeline tracks, transitions, audio normalization, export presets beyond the two fixed canvases, or external SRT sidecar export.
+- YouTube links are saved locally as references only; this build does not query the YouTube Data API or return video metadata.
+- The queue processes one render at a time, but users queue jobs individually; there is no multi-profile batch wizard or queue ordering UI.
+- Long-running FFmpeg cancellation is implemented using process termination and temporary-file cleanup, but it still needs an integration run on a machine with FFmpeg installed.
+- Black-frame, frozen-frame, loudness, caption safe-area, and full source-codec QA checks are not implemented. A conservative free-space preflight is present but does not guarantee the encode will fit.
+- Rights and job history export, user-selectable output folders, approved-folder copying, and encrypted backup are not implemented.
+
+Highest-value follow-ups are: run and refine both real FFmpeg profile smoke tests on Windows; add a dedicated batch/queue management view with progress and ordering; then design an optional local AI analysis interface with explicit model installation consent and capability checks.

@@ -36,9 +36,10 @@ class QuietRequestHandler(WSGIRequestHandler):
 
 def response(start_response, status: int, body: bytes, content_type: str = "application/json; charset=utf-8"):
     """Emit a bounded HTTP response with local-only browser security headers."""
-    phrase = {200: "OK", 202: "Accepted", 206: "Partial Content", 400: "Bad Request", 403: "Forbidden", 404: "Not Found",
+    phrase = {200: "OK", 201: "Created", 202: "Accepted", 206: "Partial Content", 400: "Bad Request", 403: "Forbidden", 404: "Not Found",
               409: "Conflict", 413: "Payload Too Large", 422: "Unprocessable Entity", 500: "Internal Server Error",
-              411: "Length Required", 416: "Range Not Satisfiable", 503: "Service Unavailable"}.get(status, "Error")
+              411: "Length Required", 416: "Range Not Satisfiable", 429: "Too Many Requests",
+              503: "Service Unavailable"}.get(status, "Error")
     start_response(f"{status} {phrase}", [("Content-Type", content_type), ("Content-Length", str(len(body))),
                                            *SECURITY_HEADERS])
     return [body]
@@ -89,6 +90,7 @@ def application(environ, start_response):
             if path == "/api/health": return json_response(start_response, 200, core.health())
             if path == "/api/creators": return json_response(start_response, 200, core.list_creators())
             if path == "/api/assets": return json_response(start_response, 200, core.list_assets())
+            if path == "/api/youtube-candidates": return json_response(start_response, 200, core.list_youtube_candidates())
             if path == "/api/jobs": return json_response(start_response, 200, core.list_jobs())
             if path == "/api/history": return json_response(start_response, 200, core.history())
             if path == "/api/publishing": return json_response(start_response, 200, core.publishing())
@@ -112,8 +114,11 @@ def application(environ, start_response):
             parts = [unquote(piece) for piece in path.strip("/").split("/")]
             if len(parts) == 4 and parts[0:2] == ["api", "assets"] and parts[3] == "inspect":
                 return json_response(start_response, 200, core.inspect_asset(parts[2]))
+            if len(parts) == 4 and parts[0:2] == ["api", "jobs"] and parts[3] == "cancel":
+                return json_response(start_response, 200, core.cancel_job(parts[2]))
             data = api_body(environ)
             if path == "/api/creators": return json_response(start_response, 200, core.create_creator(data))
+            if path == "/api/youtube-candidates": return json_response(start_response, 201, core.add_youtube_candidate(data))
             if len(parts) == 4 and parts[0:2] == ["api", "assets"] and parts[3] == "permission":
                 return json_response(start_response, 200, core.record_permission(parts[2], data))
             if len(parts) == 4 and parts[0:2] == ["api", "assets"] and parts[3] == "render":
@@ -134,7 +139,8 @@ def static_file(start_response, path: Path, method: str = "GET", range_header: s
     """Stream a managed file, supporting one bounded byte range for responsive media seeking."""
     if not path.is_file():
         raise core.APIError(404, "File not found.")
-    content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    content_type = "text/plain; charset=utf-8" if path.suffix.lower() == ".log" else (
+        mimetypes.guess_type(path.name)[0] or "application/octet-stream")
     size = path.stat().st_size
     start, end, status = 0, size - 1, 200
     extra_headers = [("Accept-Ranges", "bytes")]
@@ -198,7 +204,8 @@ def serve() -> None:
     with make_server("127.0.0.1", port, application, server_class=ThreadingWSGIServer,
                      handler_class=QuietRequestHandler) as server:
         core.recover_interrupted_jobs()
-        print(f"Variety Shorts Factory: http://127.0.0.1:{port}")
+        core.resume_queued_jobs()
+        print(f"ClipForge: http://127.0.0.1:{port}")
         print(f"Data directory: {core.DATA_ROOT}")
         print("Press Ctrl+C to stop. Publishing is disabled.")
         server.serve_forever()

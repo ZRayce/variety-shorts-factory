@@ -72,10 +72,43 @@ class LocalWorkflowApiTests(unittest.TestCase):
         self.assertEqual(response["code"], 200)
         self.assertFalse(json.loads(response["body"])["enabled"])
 
+    def test_youtube_link_intake_records_reference_without_fetching_media(self):
+        created = self.call("POST", "/api/youtube-candidates",
+                            json.dumps({"url": "https://www.youtube.com/watch?v=AbCdEf12345"}).encode())
+        self.assertEqual(created["code"], 201)
+        candidate = json.loads(created["body"])
+        self.assertEqual(candidate["status"], "media_required")
+        self.assertEqual(candidate["url"], "https://www.youtube.com/watch?v=AbCdEf12345")
+        listed = self.call("GET", "/api/youtube-candidates")
+        self.assertEqual(listed["code"], 200)
+        self.assertIn(b"AbCdEf12345", listed["body"])
+        invalid = self.call("POST", "/api/youtube-candidates",
+                            json.dumps({"url": "https://youtube.com.evil.example/watch?v=AbCdEf12345"}).encode())
+        self.assertEqual(invalid["code"], 422)
+
+    def test_health_reports_real_capabilities_without_claiming_ai(self):
+        health = json.loads(self.call("GET", "/api/health")["body"])
+        self.assertEqual(health["status"], "ok")
+        self.assertTrue(health["database_ok"])
+        self.assertFalse(health["ai_editing_available"])
+        self.assertFalse(health["publishing_enabled"])
+
+    def test_generated_render_log_is_available_to_the_local_review_ui(self):
+        path = core.LOG_ROOT / "api-pilot.log"
+        path.write_text("safe local log", encoding="utf-8")
+        try:
+            response = self.call("GET", f"/api/files/logs/{path.name}")
+        finally:
+            path.unlink(missing_ok=True)
+        self.assertEqual(response["code"], 200)
+        self.assertEqual(response["body"], b"safe local log")
+
     def test_web_interface_is_served_and_nonlocal_hosts_are_rejected(self):
         page = self.call("GET", "/")
         self.assertEqual(page["code"], 200)
-        self.assertIn(b"Variety Shorts Factory", page["body"])
+        self.assertIn(b"ClipForge", page["body"])
+        self.assertIn(b"render-profile", page["body"])
+        self.assertIn(b"commercial-use", page["body"])
         blocked = self.call("GET", "/api/health", headers={"Host": "example.org"})
         self.assertEqual(blocked["code"], 403)
 

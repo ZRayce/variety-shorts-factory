@@ -9,6 +9,10 @@ factory.sqlite3
 sources/
 outputs/
 thumbnails/
+logs/
 *.mp4
 *.mov
 *.webm
+*.mkv
+*.avi
+*.backup.sqlite3

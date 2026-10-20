@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Variety Shorts Factory</title>
+  <title>ClipForge · Local video workbench</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <aside class="sidebar">
-    <a class="brand" href="#overview"><span class="brand-mark">VS</span><span>VARIETY<br><b>SHORTS FACTORY</b></span></a>
+    <a class="brand" href="#overview"><span class="brand-mark">CF</span><span>CLIP<br><b>FORGE</b></span></a>
     <div class="workspace-label">LOCAL WORKSPACE</div>
     <nav id="nav">
       <a class="active" href="#overview" aria-label="Overview">◫ <span>Overview</span></a>
@@ -26,14 +26,16 @@
     <header class="topbar"><div><div class="eyebrow">CREATOR WORKSTATION</div><h1 id="page-title">Overview</h1></div><div class="top-status"><span class="local-dot"></span> LOCAL MODE <span class="divider"></span><span id="engine-status">Checking media tools…</span></div></header>
     <div id="notice" role="status" aria-live="polite"></div>
     <section class="page active" id="page-overview">
-      <div class="welcome"><div><div class="eyebrow accent">YOUR EDITING DESK</div><h2>Good work starts with<br>good source material.</h2><p>Bring in creator-supplied footage, record permission, then shape a short for human review.</p><a class="button primary" href="#library">Import footage <span>→</span></a></div><div class="welcome-art"><div class="art-frame"><div class="play">▶</div><span>LOCAL MEDIA PIPELINE</span></div><div class="art-caption">01 <i>·</i> SOURCE TO SHORT</div></div></div>
+      <div class="welcome"><div><div class="eyebrow accent">YOUR LOCAL EDITING DESK</div><h2>Shape an edit.<br>Review it before export.</h2><p>Import authorized footage or register a YouTube link as a reference. Only local media can enter the editor.</p><a class="button primary" href="#library">Open source library <span>→</span></a></div><div class="welcome-art"><div class="art-frame"><div class="play">▶</div><span>LOCAL MEDIA PIPELINE</span></div><div class="art-caption">01 <i>·</i> SOURCE TO DRAFT</div></div></div>
       <div class="stat-grid"><article class="stat"><span>IN YOUR LIBRARY</span><strong id="stat-assets">—</strong><small>Local source files</small></article><article class="stat"><span>NEEDS PERMISSION</span><strong id="stat-permission">—</strong><small>Unverified sources</small></article><article class="stat"><span>IN REVIEW</span><strong id="stat-review">—</strong><small>Rendered outputs</small></article><article class="stat"><span>APPROVED LOCALLY</span><strong id="stat-approved">—</strong><small>Never uploaded automatically</small></article></div>
       <div class="section-heading"><div><div class="eyebrow">WORKFLOW</div><h2>Production stages</h2></div></div>
       <div class="workflow"><div><span class="step-num">01</span><b>Source</b><small>Import a local file</small></div><i>→</i><div><span class="step-num">02</span><b>Rights</b><small>Record creator permission</small></div><i>→</i><div><span class="step-num">03</span><b>Edit</b><small>Choose a moment</small></div><i>→</i><div><span class="step-num">04</span><b>Review</b><small>Human approval</small></div></div>
     </section>
     <section class="page" id="page-library">
       <div class="section-heading"><div><div class="eyebrow">SOURCE ASSETS</div><h2>Clip library</h2><p>Imported files are private and unverified until you record permission.</p></div><button class="button primary" id="open-import">＋ Import files</button></div>
-      <div class="panel import-panel" id="import-panel" hidden><div><b>Import creator-supplied media</b><p>MP4, MOV, or WebM · Original files are not modified.</p></div><label class="file-picker">Choose files<input type="file" id="file-input" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm" multiple></label><div class="drop-zone" id="drop-zone">Or drop video files here</div></div>
+      <div class="panel import-panel" id="import-panel" hidden><div><b>Import local media</b><p>MP4, MOV, WebM, MKV, or AVI · Original files are not modified.</p></div><label class="file-picker">Choose files<input type="file" id="file-input" accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,.mp4,.mov,.webm,.mkv,.avi" multiple></label><div class="drop-zone" id="drop-zone">Or drop video files here</div></div>
+      <form class="panel creator-form" id="youtube-form"><label>YouTube video URL<input id="youtube-url" type="url" maxlength="2048" placeholder="https://www.youtube.com/watch?v=…" required></label><button class="button" type="submit">Add link reference</button><small class="field-help">Reference only. ClipForge does not download or inspect YouTube video. Provide an authorized local media file before editing.</small></form>
+      <div class="panel table-wrap"><table><thead><tr><th>YOUTUBE REFERENCE</th><th>VIDEO ID</th><th>STATUS</th></tr></thead><tbody id="youtube-list"><tr><td colspan="3" class="empty">No YouTube references saved.</td></tr></tbody></table></div>
       <div class="panel table-wrap"><table><thead><tr><th>ASSET</th><th>MEDIA</th><th>RIGHTS</th><th>IMPORTED</th><th></th></tr></thead><tbody id="asset-list"><tr><td colspan="5" class="empty">Your library is empty. Import creator-supplied footage to get started.</td></tr></tbody></table></div>
     </section>
     <section class="page" id="page-creators">
@@ -42,10 +44,11 @@
       <div class="panel table-wrap"><table><thead><tr><th>CREATOR</th><th>SOURCE URL</th><th>ADDED</th></tr></thead><tbody id="creator-list"><tr><td colspan="3" class="empty">No creator records yet.</td></tr></tbody></table></div>
     </section>
     <section class="page" id="page-editor">
-      <div class="section-heading"><div><div class="eyebrow">EDITING DESK</div><h2>Build a vertical short</h2><p>Only assets with current permission can be rendered.</p></div></div>
+      <div class="section-heading"><div><div class="eyebrow">EDITING DESK</div><h2>Build a video draft</h2><p>Only authorized local media can be rendered. Presets apply fixed edits; no AI scene understanding is installed.</p></div></div>
       <div class="editor-grid">
         <div class="panel editor-form">
           <label>Source asset<select id="edit-asset"><option value="">Select a source…</option></select></label>
+          <label>Output profile<select id="render-profile"><option value="short_vertical">Shorts · Vertical 1080 × 1920 · max 60 seconds</option><option value="long_horizontal">Long-form · Widescreen 1920 × 1080</option></select></label>
           <div id="source-meta" class="source-meta">Choose an inspected source to see duration and rights status.</div>
           <div class="field-row">
             <label>IN POINT <input id="start" type="number" min="0" step="0.1" value="0"></label>
@@ -54,7 +57,7 @@
           <div class="playhead-actions"><button class="button" id="set-in" type="button">Set In at playhead</button><button class="button" id="set-out" type="button">Set Out at playhead</button></div>
           <label>Editing formula<select id="preset"><option value="clean_vertical">Clean vertical · 1×</option><option value="punchline">Punch-in · 1.14×</option><option value="reaction">Punch-in · 1.06×</option></select></label>
           <div class="crop-controls">
-            <div class="crop-heading"><b>PORTRAIT FRAMING</b><span>Drag the frame with two sliders</span></div>
+            <div class="crop-heading"><b id="frame-label">VERTICAL FRAMING</b><span>Adjust crop with the two sliders</span></div>
             <label>HORIZONTAL <output id="crop-x-value">50%</output><input id="crop-x" type="range" min="0" max="100" value="50"></label>
             <label>VERTICAL <output id="crop-y-value">50%</output><input id="crop-y" type="range" min="0" max="100" value="50"></label>
             <small class="field-help">The preview approximates your crop. The final position is applied during rendering.</small>
@@ -62,12 +65,14 @@
           <label>Captions · SRT<textarea id="captions-srt" rows="6" placeholder="1&#10;00:00:00,000 --> 00:00:02,500&#10;Your caption text"></textarea></label>
           <label class="srt-upload">Load an SRT file<input type="file" id="srt-file" accept=".srt,application/x-subrip,text/plain"></label>
           <label>Editorial contribution<textarea id="editorial-notes" rows="4" placeholder="What context, narration, or editorial choices make this clip clearer or more entertaining?"></textarea></label>
+          <label class="check-row"><input type="checkbox" id="commercial-use"> This draft is intended for commercial use / monetization</label>
+          <small class="field-help">Commercial use requires a separate current permission record. A rights record is your record, not independent legal verification.</small>
           <button class="button primary" id="render-button">Render for review</button>
           <small class="field-help" id="render-help">Choose a source with current permission. FFmpeg and FFprobe are required to render.</small>
         </div>
         <div class="preview panel">
           <div class="preview-screen" id="preview-screen"><div class="preview-placeholder"><span>9:16</span><b>SOURCE PREVIEW</b><small>Select a source to scrub and frame it</small></div></div>
-          <div class="preview-footer"><span>SOURCE · 9:16 FRAMING PREVIEW</span><span id="preview-status">Awaiting a source</span></div>
+          <div class="preview-footer"><span id="preview-profile-label">SOURCE · 9:16 FRAMING PREVIEW</span><span id="preview-status">Awaiting a source</span></div>
         </div>
       </div>
     </section>
@@ -75,9 +80,9 @@
     <section class="page" id="page-publishing"><div class="section-heading"><div><div class="eyebrow">PUBLISHING</div><h2>Manual by design</h2></div></div><div class="panel publishing-card"><div class="lock-icon">↗</div><div><h3>Uploads are disabled</h3><p>This local build does not connect to YouTube or any publishing service. An approval here only records your local human review decision; it never uploads a video.</p><span class="badge muted">CONNECTOR NOT CONFIGURED</span></div></div></section>
     <section class="page" id="page-history"><div class="section-heading"><div><div class="eyebrow">AUDIT TRAIL</div><h2>Production history</h2></div></div><div class="panel table-wrap"><table><thead><tr><th>TIME</th><th>ITEM</th><th>STAGE</th><th>OUTCOME</th><th>DETAILS</th></tr></thead><tbody id="history-list"><tr><td colspan="5" class="empty">No recorded events yet.</td></tr></tbody></table></div></section>
     <section class="page" id="page-settings"><div class="section-heading"><div><div class="eyebrow">LOCAL CONFIGURATION</div><h2>Settings</h2></div></div><div class="panel settings-grid" id="settings-panel"></div></section>
-    <footer>VARIETY SHORTS FACTORY <span>LOCAL FIRST · HUMAN REVIEW · NO AUTOMATIC UPLOADS</span></footer>
+    <footer>CLIPFORGE <span>LOCAL FIRST · HUMAN REVIEW · NO AUTOMATIC UPLOADS</span></footer>
   </main>
-  <dialog id="permission-dialog" aria-labelledby="permission-title"><form method="dialog" id="permission-form"><div class="eyebrow">RIGHTS RECORD</div><h2 id="permission-title">Record creator permission</h2><p>Importing a file does not verify reuse rights. Keep this record accurate and retain the original evidence.</p><input type="hidden" id="permission-asset"><label>Creator<select id="creator-select" required></select></label><label>Permission status<select id="permission-status"><option value="granted">Granted</option><option value="unverified">Unverified</option><option value="revoked">Revoked</option><option value="rejected">Rejected</option></select></label><label>Evidence / notes<textarea id="permission-evidence" rows="3" required placeholder="Where permission was received and what it covers"></textarea></label><label>Expires (optional)<input type="datetime-local" id="permission-expiry"></label><div class="dialog-actions"><button class="button" value="cancel">Cancel</button><button class="button primary" id="save-permission" value="save">Save record</button></div></form></dialog>
+  <dialog id="permission-dialog" aria-labelledby="permission-title"><form method="dialog" id="permission-form"><div class="eyebrow">RIGHTS RECORD</div><h2 id="permission-title">Record source permissions</h2><p>Keep editing and commercial-use clearance separate. ClipForge stores your evidence reference; it does not verify ownership or legal scope.</p><input type="hidden" id="permission-asset"><label>Creator<select id="creator-select" required></select></label><label>Editing permission<select id="permission-status"><option value="unverified">Unverified</option><option value="granted">Granted</option><option value="revoked">Revoked</option><option value="rejected">Rejected</option></select></label><label>Editing permission evidence<textarea id="permission-evidence" rows="2" required placeholder="Where permission was received and what it covers"></textarea></label><label>Editing permission expires (optional)<input type="datetime-local" id="permission-expiry"></label><label>Commercial-use permission<select id="commercial-status"><option value="unverified">Unverified</option><option value="granted">Granted</option><option value="revoked">Revoked</option><option value="rejected">Rejected</option></select></label><label>Commercial permission evidence<textarea id="commercial-evidence" rows="2" placeholder="Required if commercial permission is granted"></textarea></label><label>Commercial permission expires (optional)<input type="datetime-local" id="commercial-expiry"></label><label>Original source URL<input type="url" id="source-url" maxlength="500" placeholder="https://…"></label><label>License / evidence reference<input id="license-reference" maxlength="500"></label><label>Attribution requirements<textarea id="attribution" rows="2" maxlength="1000"></textarea></label><label>Editing / reuse restrictions<textarea id="restrictions" rows="2" maxlength="1000"></textarea></label><div class="dialog-actions"><button class="button" value="cancel">Cancel</button><button class="button primary" id="save-permission" value="save">Save rights version</button></div></form></dialog>
   <script src="/static/app.js" defer></script>
 </body>
 </html>
