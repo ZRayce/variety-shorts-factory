@@ -87,13 +87,180 @@ def connect():
 
 
 def resolve_executable(configured: str) -> str | None:
-    """Resolve an explicit FFmpeg tool path or a PATH command without shell expansion."""
+    """Resolve configured, known Windows, or PATH tools without invoking a shell."""
     if not isinstance(configured, str) or not configured.strip():
         return None
-    path = Path(configured).expanduser()
-    if path.is_file():
+    requested = configured.strip().strip('"')
+    path = Path(requested).expanduser()
+    configured_path = path.is_absolute() or "\\" in requested or "/" in requested
+    if configured_path and path.is_file():
         return str(path.resolve())
-    return shutil.which(configured)
+    # A configured but stale absolute path must not prevent fallback discovery.
+    if not configured_path:
+        found = shutil.which(requested)
+        if found:
+            return str(Path(found).resolve())
+    executable_name = Path(requested).name.lower()
+    tool_name = "ffprobe" if "ffprobe" in executable_name else "ffmpeg"
+    known_path = Path(r"C:\ffmpeg\bin") / f"{tool_name}.exe"
+    if known_path.is_file():
+        return str(known_path.resolve())
+    for name in (f"{tool_name}.exe", tool_name):
+        found = shutil.which(name)
+        if found:
+            return str(Path(found).resolve())
+    return None
+
+
+def redact_command(command: list[str]) -> list[str]:
+    """Mask credentials in argument text before commands enter logs or API diagnostics."""
+    secret_pattern = re.compile(r"(?i)([?&]?(?:access_?token|api_?key|auth|authorization|credential|password|passwd|secret|sig|signature|token)=)[^&\s]+")
+    user_info_pattern = re.compile(r"(?i)(https?://)[^/@\s:]+:[^/@\s]+@")
+    redacted, redact_next = [], False
+    for raw in command:
+        value = str(raw)
+        if redact_next:
+            value = "[REDACTED]"
+            redact_next = False
+        elif value.lower() in {"-headers", "-cookies", "-authorization", "--password", "--token"}:
+            redact_next = True
+        else:
+            value = user_info_pattern.sub(r"\1[REDACTED]@", value)
+            value = secret_pattern.sub(r"\1[REDACTED]", value)
+            value = re.sub(r"(?i)(bearer\s+)[a-z0-9._~+/-]+=*", r"\1[REDACTED]", value)
+        redacted.append(value[:2000])
+    return redacted
+
+
+def redact_diagnostic_text(value: str) -> str:
+    """Apply the same credential masks to short tool output shown in UI diagnostics."""
+    return redact_command([value])[0]
+
+
+def run_diagnostic_command(command: list[str], timeout: float, output_path: Path | None = None):
+    """Run a bounded media-tool command and record safe timing and exit diagnostics."""
+    started = time.monotonic()
+    safe_command = redact_command(command)
+    log.info("media_command_start command=%s output_path=%s", json.dumps(safe_command), output_path or "none")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                                check=False, shell=False)
+        log.info("media_command_complete elapsed_seconds=%.3f exit_code=%s output_path=%s",
+                 time.monotonic() - started, result.returncode, output_path or "none")
+        return result
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("media_command_error elapsed_seconds=%.3f error_type=%s output_path=%s",
+                    time.monotonic() - started, type(exc).__name__, output_path or "none")
+        raise
+
+
+def diagnose_media_tools() -> dict[str, Any]:
+    """Check FFmpeg and FFprobe availability, executable versions, and bounded errors."""
+    results = {}
+    for name, configured in (("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)):
+        item = {"status": "Missing", "path": None, "version": None, "error": None}
+        try:
+            executable = resolve_executable(configured)
+        except (OSError, TypeError, ValueError) as exc:
+            item.update(status="Error", error=f"Executable path could not be checked ({type(exc).__name__}).")
+            results[name] = item
+            continue
+        if not executable:
+            item["error"] = f"{name}.exe was not found in its configured path, C:\\ffmpeg\\bin, or PATH."
+            results[name] = item
+            continue
+        item["path"] = executable
+        try:
+            command = [executable, "-version"]
+            result = run_diagnostic_command(command, timeout=8)
+            if result.returncode != 0:
+                detail = redact_diagnostic_text((result.stderr or result.stdout or "No version details were returned.").strip())
+                item["status"] = "Error"
+                item["error"] = f"Version check exited with code {result.returncode}: {detail[:800]}"
+            else:
+                lines = (result.stdout or result.stderr).splitlines()
+                item["version"] = lines[0][:240] if lines else "Version output was empty."
+                item["status"] = "Available" if lines else "Error"
+                if not lines:
+                    item["error"] = "The executable returned no version information."
+        except FileNotFoundError:
+            item.update(status="Missing", error="The configured executable disappeared before it could run.")
+        except PermissionError:
+            item.update(status="Error", error="Windows denied permission to run this executable.")
+        except subprocess.TimeoutExpired:
+            item.update(status="Error", error="The version check exceeded its 8-second timeout.")
+        except (OSError, subprocess.SubprocessError) as exc:
+            item.update(status="Error", error=f"Version check failed ({type(exc).__name__}).")
+        results[name] = item
+    return {**results, "setup_instructions": (
+        "Install a trusted FFmpeg build, add C:\\ffmpeg\\bin to Windows PATH, or set VSF_FFMPEG and "
+        "VSF_FFPROBE to the executable paths in the project .env file. Restart ClipForge after changing settings.")}
+
+
+def run_ffmpeg_render_test() -> dict[str, Any]:
+    """Render and probe a tiny synthetic clip in a unique temporary directory, then remove it."""
+    diagnostics = diagnose_media_tools()
+    def failed(detail: str, **extra: Any) -> dict[str, Any]:
+        return {"status": "failed", "detail": detail, "ffmpeg": diagnostics["ffmpeg"],
+                "ffprobe": diagnostics["ffprobe"], "setup_instructions": diagnostics["setup_instructions"], **extra}
+
+    for name in ("ffmpeg", "ffprobe"):
+        tool = diagnostics[name]
+        if tool["status"] != "Available":
+            return failed(f"{name.title()} is {tool['status'].lower()}: {tool['error']}")
+    ffmpeg, ffprobe = diagnostics["ffmpeg"]["path"], diagnostics["ffprobe"]["path"]
+    output_path = None
+    try:
+        with tempfile.TemporaryDirectory(prefix="clipforge-diagnostic-", dir=DATA_ROOT) as temporary_directory:
+            output_path = Path(temporary_directory) / "synthetic-test.mp4"
+            render_command = [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+                              "-f", "lavfi", "-i", "testsrc=size=320x180:rate=24",
+                              "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=44100",
+                              "-t", "2", "-shortest", "-threads", "1", "-c:v", "mpeg4", "-q:v", "5",
+                              "-c:a", "aac", "-movflags", "+faststart", str(output_path)]
+            rendered = run_diagnostic_command(render_command, timeout=60, output_path=output_path)
+            if rendered.returncode != 0:
+                detail = redact_diagnostic_text((rendered.stderr or rendered.stdout or "FFmpeg returned no error details.").strip())
+                return failed(f"Synthetic render exited with code {rendered.returncode}.",
+                              exit_code=rendered.returncode, command=redact_command(render_command),
+                              stderr=detail[-1200:], output_path=str(output_path))
+            if not output_path.is_file() or output_path.stat().st_size <= 0:
+                return failed("FFmpeg exited successfully but did not produce a nonempty output file.",
+                              exit_code=rendered.returncode, command=redact_command(render_command),
+                              output_path=str(output_path))
+            probe_command = [ffprobe, "-v", "error", "-show_entries", "stream=codec_type:format=duration",
+                             "-of", "json", str(output_path)]
+            probed = run_diagnostic_command(probe_command, timeout=15, output_path=output_path)
+            if probed.returncode != 0:
+                detail = redact_diagnostic_text((probed.stderr or probed.stdout or "FFprobe returned no error details.").strip())
+                return failed(f"FFprobe exited with code {probed.returncode}.", exit_code=probed.returncode,
+                              command=redact_command(probe_command), stderr=detail[-1200:],
+                              output_path=str(output_path))
+            try:
+                probe_data = json.loads(probed.stdout)
+                streams = probe_data.get("streams", [])
+                duration = float(probe_data.get("format", {}).get("duration", 0))
+            except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
+                streams, duration = [], 0.0
+            if (not isinstance(streams, list) or not any(isinstance(stream, dict) and stream.get("codec_type") == "video"
+                                                          for stream in streams)
+                    or not any(isinstance(stream, dict) and stream.get("codec_type") == "audio"
+                               for stream in streams)
+                    or not math.isfinite(duration) or abs(duration - 2.0) > 0.35):
+                return failed("FFprobe output did not contain video and audio streams near the expected 2-second duration.",
+                              duration_seconds=duration if math.isfinite(duration) else None,
+                              output_path=str(output_path))
+            return {"status": "passed", "detail": "Synthetic video and audio rendered and verified successfully.",
+                    "duration_seconds": round(duration, 3), "size_bytes": output_path.stat().st_size,
+                    "ffmpeg": diagnostics["ffmpeg"], "ffprobe": diagnostics["ffprobe"]}
+    except PermissionError:
+        return failed("Windows denied permission to execute a media tool or create the temporary render.")
+    except subprocess.TimeoutExpired as exc:
+        return failed(f"A diagnostic media command exceeded its {exc.timeout}-second timeout.")
+    except FileNotFoundError:
+        return failed("A media executable or temporary test file became unavailable during the test.")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return failed(f"Diagnostic render failed ({type(exc).__name__}).")
 
 
 def initialize_database() -> None:
@@ -1585,23 +1752,33 @@ def finish_cancelled_render(job_id: str, detail: str) -> None:
 def run_render_process(job_id: str, command: list[str], log_path: Path, timeout: float) -> None:
     """Run FFmpeg without shell parsing or unbounded output capture, and register it for safe cancellation."""
     creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
-    with log_path.open("w", encoding="utf-8", newline="\n") as log_stream:
-        process = subprocess.Popen(command, cwd=OUTPUT_ROOT, stdout=log_stream, stderr=subprocess.STDOUT,
-                                   text=True, creationflags=creationflags)
-        with PROCESS_LOCK:
-            ACTIVE_PROCESSES[job_id] = process
-        try:
-            if cancellation_requested(job_id) and process.poll() is None:
-                process.terminate()
-            try:
-                return_code = process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=10)
-                raise
-        finally:
+    started = time.monotonic()
+    return_code = None
+    safe_command = redact_command(command)
+    output_path = command[-1] if command else "unknown"
+    log.info("ffmpeg_render_start job=%s command=%s output_path=%s", job_id[:12],
+             json.dumps(safe_command), output_path)
+    try:
+        with log_path.open("w", encoding="utf-8", newline="\n") as log_stream:
+            process = subprocess.Popen(command, cwd=OUTPUT_ROOT, stdout=log_stream, stderr=subprocess.STDOUT,
+                                       text=True, creationflags=creationflags, shell=False)
             with PROCESS_LOCK:
-                ACTIVE_PROCESSES.pop(job_id, None)
+                ACTIVE_PROCESSES[job_id] = process
+            try:
+                if cancellation_requested(job_id) and process.poll() is None:
+                    process.terminate()
+                try:
+                    return_code = process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    return_code = process.wait(timeout=10)
+                    raise
+            finally:
+                with PROCESS_LOCK:
+                    ACTIVE_PROCESSES.pop(job_id, None)
+    finally:
+        log.info("ffmpeg_render_complete job=%s elapsed_seconds=%.3f exit_code=%s output_path=%s",
+                 job_id[:12], time.monotonic() - started, return_code, output_path)
     if cancellation_requested(job_id):
         return
     if return_code != 0:
@@ -1797,8 +1974,18 @@ def _render_job(job_id: str) -> None:
         elif output_reserved:
             remove_generated_file(output, "failed_output_reservation")
         remove_generated_file(temporary_output, "partial_render_output")
-        log_diagnostic = read_log_tail(render_log, 500)
-        diagnostic = log_diagnostic if log_diagnostic.strip() else str(exc)[:500]
+        log_diagnostic = redact_diagnostic_text(read_log_tail(render_log, 1200)).strip()
+        if isinstance(exc, subprocess.CalledProcessError):
+            failure = f"FFmpeg exited with code {exc.returncode}."
+        elif isinstance(exc, subprocess.TimeoutExpired):
+            failure = f"FFmpeg exceeded its {exc.timeout}-second render timeout."
+        else:
+            failure = f"Render or output verification failed ({type(exc).__name__}): {redact_diagnostic_text(str(exc))[:500]}"
+        command_detail = json.dumps(redact_command(command))
+        diagnostic = f"{failure}\nCommand: {command_detail}"
+        if log_diagnostic:
+            diagnostic += f"\nFFmpeg output (tail):\n{log_diagnostic}"
+        diagnostic = diagnostic[:4000]
         with connect() as db:
             db.execute("UPDATE jobs SET status='failed',stage='render',error_category='render_failure',diagnostic=?,log_path=?,retry_safe=0,updated_at=? WHERE id=?",
                        (diagnostic, render_log.name if render_log.exists() else None, now_iso(), job_id))

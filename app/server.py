@@ -123,6 +123,10 @@ def application(environ, start_response):
                 query = parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=True)
                 filename = query.get("filename", [""])[0]
                 return json_response(start_response, 200, core.import_local_file(filename, environ["wsgi.input"], environ.get("CONTENT_LENGTH")))
+            if path == "/api/diagnostics":
+                return json_response(start_response, 200, core.diagnose_media_tools())
+            if path == "/api/diagnostics/render-test":
+                return json_response(start_response, 200, core.run_ffmpeg_render_test())
             parts = [unquote(piece) for piece in path.strip("/").split("/")]
             if len(parts) == 4 and parts[0:2] == ["api", "assets"] and parts[3] == "inspect":
                 return json_response(start_response, 200, core.inspect_asset(parts[2]))

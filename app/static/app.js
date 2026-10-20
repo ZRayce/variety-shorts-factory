@@ -347,6 +347,50 @@ function renderSettings() {
   $('#settings-panel').innerHTML = rows.map(([key, value]) => `<span>${escapeHtml(key)}</span><div>${escapeHtml(value)}</div>`).join('');
 }
 
+function renderMediaDiagnostics(result, renderTest = null) {
+  const toolPanel = ['ffmpeg', 'ffprobe'].map(name => {
+    const tool = result[name] || { status: 'Error', error: 'No diagnostic response was received.' };
+    const statusClass = String(tool.status).toLowerCase();
+    return `<article class="diagnostic-tool"><div class="diagnostic-tool-heading"><b>${name === 'ffmpeg' ? 'FFmpeg' : 'FFprobe'}</b><span class="tool-status ${escapeHtml(statusClass)}">${escapeHtml(tool.status)}</span></div>` +
+      `<div class="diagnostic-detail"><span>Executable</span><code>${escapeHtml(tool.path || 'Not found')}</code></div>` +
+      `<div class="diagnostic-detail"><span>Version</span><code>${escapeHtml(tool.version || 'Unavailable')}</code></div>` +
+      (tool.error ? `<p class="diagnostic-error">${escapeHtml(tool.error)}</p>` : '') + '</article>';
+  }).join('');
+  const setupNeeded = ['ffmpeg', 'ffprobe'].some(name => result[name]?.status !== 'Available');
+  const setup = setupNeeded ? `<div class="diagnostic-setup"><b>Setup required</b><p>${escapeHtml(result.setup_instructions || 'Configure FFmpeg and FFprobe, then restart ClipForge.')}</p></div>` : '';
+  let renderResult = '';
+  if (renderTest) {
+    const passed = renderTest.status === 'passed';
+    const detail = [renderTest.detail, renderTest.duration_seconds ? `Verified duration: ${renderTest.duration_seconds.toFixed(3)} seconds.` : '',
+      renderTest.size_bytes ? `Output: ${renderTest.size_bytes.toLocaleString()} bytes.` : '',
+      renderTest.exit_code != null ? `Exit code: ${renderTest.exit_code}.` : '',
+      renderTest.command ? `Command: ${renderTest.command.map(escapeHtml).join(' ')}` : '',
+      renderTest.stderr ? `Details: ${escapeHtml(renderTest.stderr)}` : ''].filter(Boolean).join(' ');
+    renderResult = `<div class="diagnostic-result ${passed ? 'passed' : 'failed'}"><b>${passed ? 'Test render passed' : 'Test render failed'}</b><p>${detail}</p></div>`;
+  }
+  $('#media-diagnostics').innerHTML = `<div class="diagnostic-tools">${toolPanel}</div>${setup}${renderResult}`;
+}
+
+async function runMediaDiagnostics() {
+  const button = $('#run-diagnostics');
+  button.disabled = true;
+  $('#media-diagnostics').innerHTML = '<p>Checking configured executable paths and querying tool versions…</p>';
+  try { renderMediaDiagnostics(await api('/api/diagnostics', { method: 'POST' })); }
+  catch (error) { $('#media-diagnostics').textContent = `Diagnostics request failed: ${error.message}`; }
+  finally { button.disabled = false; }
+}
+
+async function runSyntheticRenderTest() {
+  const button = $('#run-render-test');
+  button.disabled = true;
+  $('#media-diagnostics').innerHTML = '<p>Running a short synthetic video-and-audio render in a temporary folder…</p>';
+  try {
+    const result = await api('/api/diagnostics/render-test', { method: 'POST' });
+    renderMediaDiagnostics(result, result);
+  } catch (error) { $('#media-diagnostics').textContent = `Test render request failed: ${error.message}`; }
+  finally { button.disabled = false; }
+}
+
 function renderSourceMeta() {
   const asset = state.assets.find(item => item.id === $('#edit-asset').value);
   if (!asset) {
@@ -426,6 +470,7 @@ function navigate() {
   document.querySelectorAll('#nav a').forEach(link => link.classList.toggle('active', link.hash === `#${page}`));
   $('#page-title').textContent = routeTitles[page];
   if (page === 'history') api('/api/history').then(renderHistory).catch(error => showNotice(error.message));
+  if (page === 'settings') runMediaDiagnostics();
 }
 
 async function importFiles(files) {
@@ -621,6 +666,8 @@ $('#render-profile').addEventListener('change', () => {
     applyCaptionPreset($('#caption-preset').value);
   }
 });
+$('#run-diagnostics').addEventListener('click', runMediaDiagnostics);
+$('#run-render-test').addEventListener('click', runSyntheticRenderTest);
 $('#commercial-use').addEventListener('change', () => { renderAssets(); renderSourceMeta(); });
 $('#crop-x').addEventListener('input', updateCropPreview);
 $('#crop-y').addEventListener('input', updateCropPreview);

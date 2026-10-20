@@ -18,6 +18,17 @@ from app import main as core
 
 
 class LocalWorkflowApiTests(unittest.TestCase):
+    def setUp(self):
+        # API tests use placeholder bytes; real FFprobe behavior is covered by the integration test.
+        self.probe_patch = patch.object(core, "probe_media", return_value=None)
+        resolver = core.resolve_executable
+        self.ffprobe_patch = patch.object(core, "resolve_executable",
+            side_effect=lambda configured: None if configured == core.FFPROBE else resolver(configured))
+        self.probe_patch.start()
+        self.addCleanup(self.probe_patch.stop)
+        self.ffprobe_patch.start()
+        self.addCleanup(self.ffprobe_patch.stop)
+
     def call(self, method, path, body=b"", headers=None):
         headers = headers or {}
         parsed = urlsplit(path)
@@ -94,6 +105,16 @@ class LocalWorkflowApiTests(unittest.TestCase):
         self.assertFalse(health["ai_editing_available"])
         self.assertFalse(health["publishing_enabled"])
 
+    def test_ffmpeg_diagnostics_and_render_test_endpoints_return_structured_results(self):
+        with patch.object(core, "diagnose_media_tools", return_value={"ffmpeg": {"status": "Available"},
+                                                                         "ffprobe": {"status": "Missing"}}), \
+             patch.object(core, "run_ffmpeg_render_test", return_value={"status": "passed", "duration_seconds": 2.0}):
+            diagnostics = self.call("POST", "/api/diagnostics")
+            render_test = self.call("POST", "/api/diagnostics/render-test")
+        self.assertEqual(diagnostics["code"], 200)
+        self.assertEqual(json.loads(diagnostics["body"])["ffprobe"]["status"], "Missing")
+        self.assertEqual(json.loads(render_test["body"])["status"], "passed")
+
     def test_project_api_saves_and_reloads_versioned_ordered_timeline(self):
         imported = json.loads(self.call("POST", "/api/import?filename=project-api.mp4", b"project api fixture")['body'])
         creator = json.loads(self.call("POST", "/api/creators", json.dumps({"name": "Project API Creator"}).encode())['body'])
@@ -152,6 +173,8 @@ class LocalWorkflowApiTests(unittest.TestCase):
         self.assertIn(b"ClipForge", page["body"])
         self.assertIn(b"render-profile", page["body"])
         self.assertIn(b"commercial-use", page["body"])
+        self.assertIn(b"run-diagnostics", page["body"])
+        self.assertIn(b"run-render-test", page["body"])
         blocked = self.call("GET", "/api/health", headers={"Host": "example.org"})
         self.assertEqual(blocked["code"], 403)
 

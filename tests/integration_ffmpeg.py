@@ -55,6 +55,15 @@ def main() -> None:
         os.environ["VSF_DATA_DIR"] = str(workspace / "ClipForge data with spaces")
         from app import main as core
 
+        tool_diagnostics = core.diagnose_media_tools()
+        assert tool_diagnostics["ffmpeg"]["status"] == "Available", tool_diagnostics["ffmpeg"]
+        assert tool_diagnostics["ffprobe"]["status"] == "Available", tool_diagnostics["ffprobe"]
+        assert Path(tool_diagnostics["ffmpeg"]["path"]).resolve() == Path(ffmpeg).resolve()
+        assert Path(tool_diagnostics["ffprobe"]["path"]).resolve() == Path(ffprobe).resolve()
+        diagnostic_render = core.run_ffmpeg_render_test()
+        assert diagnostic_render["status"] == "passed", diagnostic_render
+        print("PASS: configured FFmpeg/FFprobe versions, executable paths, and temporary synthetic render test.")
+
         source_path = workspace / "Synthetic scene source with spaces.mp4"
         generate = [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
                     "-f", "lavfi", "-i", "color=c=red:s=320x240:r=24:d=8",

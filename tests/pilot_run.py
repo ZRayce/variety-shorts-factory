@@ -76,9 +76,22 @@ def run_pilot() -> None:
             assert style_status == 200 and b".review-video" in style and b"aspect-ratio:9/16" in style
             assert script_status == 200 and b"/api/assets/" in script and b"/source" in script and b"/api/youtube-candidates" in script
             assert b"/api/projects/" in script and b"/api/candidates/" in script and b"/discover" in script
+            assert b"run-diagnostics').addEventListener('click', runMediaDiagnostics)" in script
+            assert b"run-render-test').addEventListener('click', runSyntheticRenderTest)" in script
             assert b"/api/jobs/" in script and b"/cancel" in script
             health = json.loads(health_body)
             assert health["status"] == "ok" and health["publishing_enabled"] is False
+            assert b"run-diagnostics" in page and b"run-render-test" in page and b"media-diagnostics" in page
+            diagnostics_status, _, diagnostics_body = call(base + "/api/diagnostics", "POST", b"{}",
+                                                             {"Content-Type": "application/json"})
+            assert diagnostics_status == 200, diagnostics_body
+            diagnostics = json.loads(diagnostics_body)
+            if health["ffmpeg_available"] and health["ffprobe_available"]:
+                render_test_status, _, render_test_body = call(base + "/api/diagnostics/render-test", "POST", b"{}",
+                                                                {"Content-Type": "application/json"})
+                assert render_test_status == 200, render_test_body
+                assert json.loads(render_test_body)["status"] == "passed", render_test_body
+                print("PASS: configured FFmpeg/FFprobe versions and temporary synthetic render verified over HTTP")
 
             preview_bytes = b"synthetic preview output"
             preview_path = Path(data_dir) / "outputs" / "pilot-preview.mp4"
@@ -101,7 +114,10 @@ def run_pilot() -> None:
                 {"Content-Type": "application/octet-stream"})
             if health["ffprobe_available"]:
                 assert upload_status == 422, f"FFprobe should reject synthetic bytes, got {upload_status}"
-                print("PASS: server startup, browser UI, health endpoint, and invalid-media rejection")
+                assert diagnostics["ffmpeg"]["status"] == ("Available" if health["ffmpeg_available"] else "Missing")
+                assert diagnostics["ffprobe"]["status"] == "Available"
+                print("PASS: HTTP server, diagnostics UI/API, executable versions, and synthetic render test")
+                print("PASS: FFprobe rejected invalid-media upload")
                 print("SKIP: authorized real-media import, edit, and render; no sample footage was supplied")
                 return
             assert upload_status == 200, f"Expected safe import without FFprobe, got {upload_status}: {upload_body!r}"

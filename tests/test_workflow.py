@@ -289,7 +289,7 @@ class WorkflowTests(unittest.TestCase):
     def test_missing_ffmpeg_becomes_a_persisted_retryable_failure(self):
         with patch.object(core.threading.Thread, "start", lambda _self: None):
             queued = core.queue_render(self.asset_id, {"start_seconds": 10, "end_seconds": 18})
-        with patch.object(core.shutil, "which", return_value=None):
+        with patch.object(core, "resolve_executable", return_value=None):
             core.render_job(queued["id"])
         job = core.get_job(queued["id"])
         self.assertEqual((job["status"], job["error_category"], job["retry_safe"]),

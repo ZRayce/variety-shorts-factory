@@ -20,6 +20,7 @@ The existing dependency-free browser interface is retained and served from a loo
 - Persistent queued jobs that resume after restart, one FFmpeg process at a time, safe queued/running cancellation, bounded diagnostic logs, retry for safe dependency/interruption failures, a conservative free-space check, temporary render output, and output verification with FFprobe.
 - Draft preview, quality report, render logs, explicit local approval confirmation, and retry/reject/request-changes states. Approval never publishes.
 - Local health page reports the database, FFmpeg, FFprobe, publishing, and AI capability state.
+- Settings diagnostics check configured FFmpeg/FFprobe paths, the supported `C:\ffmpeg\bin` install location, then PATH; `-version` checks run with timeouts and report executable, version, and failure status. A synthetic two-second video/audio render is verified with FFprobe in a unique temporary subdirectory and removed afterward.
 - SQLite schema migrations create a pre-migration backup rather than replacing existing records. Originals are never edited in place.
 
 ## AI editing status
@@ -99,7 +100,7 @@ $env:VSF_FFPROBE='C:\ffmpeg\bin\ffprobe.exe'
 python tests/integration_ffmpeg.py
 ```
 
-The unit/API/workflow suite covers schema migration, project versions, segment and candidate bounds, rights snapshots, transcript overlap, caption styles, queue recovery, collisions, failures, and manual project/output review. The TCP pilot exercises the real local HTTP server. The integration script creates only synthetic color/audio footage, checks scene and silence analysis, handles paths with spaces, renders multi-segment Shorts with Unicode captions/audio and widescreen output, verifies timestamps/order and output metadata, and confirms explicit local approval. It deletes its temporary database, media, logs, and renders on exit. Run each command to see the exact results for your machine; mocked tests do not substitute for this real-media test.
+The unit/API/workflow suite covers schema migration, project versions, segment and candidate bounds, rights snapshots, transcript overlap, caption styles, queue recovery, collisions, failures, and manual project/output review. FFmpeg diagnostics tests mock absent executables, permission/timeout/process failures, successful verification, invalid output, and cleanup. The TCP pilot exercises the real local HTTP server. The integration script runs diagnostics and the synthetic test render with real FFmpeg/FFprobe, then creates separate synthetic color/audio footage, checks scene and silence analysis, handles paths with spaces, renders multi-segment Shorts with Unicode captions/audio and widescreen output, verifies timestamps/order and output metadata, and confirms explicit local approval. It deletes its temporary database, media, logs, and renders on exit. Run each command to see the exact results for your machine; mocked tests do not substitute for this real-media test.
 
 ## Security and data assumptions
 
